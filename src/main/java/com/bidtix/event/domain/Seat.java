@@ -15,12 +15,16 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Getter
 @Entity
 @Table(name = "seats")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Seat extends AuditableEntity {
+
+    @Column(name = "public_id", nullable = false, updatable = false)
+    private UUID publicId = UUID.randomUUID();
 
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "zone_id", nullable = false, updatable = false)

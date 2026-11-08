@@ -29,7 +29,7 @@ Full data model and concurrency strategy: [`docs/database-schema.md`](docs/datab
   endpoint is not exposed yet
 - Tests: JUnit 5, Mockito, MockMvc, Spring Security test; Testcontainers (real Postgres + Redis) is planned
 
-> Status: schema (Flyway V1–V9), JPA entities, the `auth` module and global error handling are done.
+> Status: schema (Flyway V1–V12), JPA entities, the `auth` module and global error handling are done.
 > Everything else (events API, booking, auction, payment, idempotency filter) is so far only schema and
 > entities. Redis and Testcontainers are planned but not yet in `pom.xml` / `compose.yaml`; add them
 > before writing code that depends on them. Until Testcontainers exists,
@@ -44,6 +44,9 @@ Full data model and concurrency strategy: [`docs/database-schema.md`](docs/datab
 - `publicId` is generated in Java (`UUID.randomUUID()`), and the DB default is only a fallback.
 
 ## Commands
+
+`make help` lists shortcuts for everything below (`make run-local`, `make test`, `make test-one T=ClassName`,
+`make keys`, `make psql`, ...). The raw commands:
 
 ```bash
 ./mvnw spring-boot:run                 # run app; spring-boot-docker-compose starts services from compose.yaml

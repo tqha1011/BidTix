@@ -30,9 +30,11 @@ public enum ErrorCode {
     // --- user / auth ---
     EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "Email is already registered"),
     INVALID_REFRESH_TOKEN(HttpStatus.UNAUTHORIZED, "Refresh token is missing, expired or revoked"),
-
+    USER_NOTFOUND(HttpStatus.NOT_FOUND, "User not found"),
     // --- booking (example, extend later) ---
-    SEAT_UNAVAILABLE(HttpStatus.CONFLICT, "Seat is no longer available");
+    SEAT_UNAVAILABLE(HttpStatus.CONFLICT, "Seat is no longer available"),
+    EVENT_NOTFOUND(HttpStatus.NOT_FOUND, "Event not found"),
+    ZONE_NOTFOUND(HttpStatus.NOT_FOUND, "Zone not found");
 
     private final HttpStatus status;
     private final String message;

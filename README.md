@@ -74,6 +74,9 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false ./mvnw spring-boot:run
 ```
 
+Shortcut for both steps: `make run-local`. Run `make help` to see all commands (`make test`,
+`make test-one T=AuthServiceTest`, `make psql`, ...).
+
 Swagger UI: <http://localhost:8080/swagger-ui/index.html> · OpenAPI JSON: `/v3/api-docs`
 
 ### Try the auth API
@@ -126,7 +129,7 @@ database; it will be fixed together with the Testcontainers setup that the concu
 
 ## Roadmap
 
-- [x] Database schema (Flyway migrations V1–V9 by module) and JPA entities
+- [x] Database schema (Flyway migrations V1–V12 by module) and JPA entities
 - [x] Authentication: register, login, refresh with rotation, logout, refresh token in a cookie
 - [x] Global error handling
 - [ ] Testcontainers (Postgres) and a working context test
