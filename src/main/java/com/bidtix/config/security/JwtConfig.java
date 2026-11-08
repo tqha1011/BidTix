@@ -40,7 +40,6 @@ public class JwtConfig {
     @Bean
     JwtEncoder jwtEncoder() {
         RSAKey jwk = new RSAKey.Builder(publicKey).privateKey(privateKey).build();
-        NimbusJwtEncoder nimbusJwtEncoder = new NimbusJwtEncoder(new ImmutableJWKSet<>(new JWKSet(jwk)));
-        return nimbusJwtEncoder;
+        return new NimbusJwtEncoder(new ImmutableJWKSet<>(new JWKSet(jwk)));
     }
 }
