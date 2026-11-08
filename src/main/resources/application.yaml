@@ -9,6 +9,12 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+  security:
+    oauth2:
+      resourceserver:
+        jwt:
+          jws-algorithms:
+            - RS256
   flyway:
     enabled: true
     locations: classpath:db/migration
