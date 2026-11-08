@@ -18,3 +18,16 @@ spring:
   flyway:
     enabled: true
     locations: classpath:db/migration
+
+bidtix:
+  jwt:
+    # PEM files: private key = PKCS#8 ("BEGIN PRIVATE KEY"), public key = X.509 ("BEGIN PUBLIC KEY").
+    # Generate dev keys into ./keys (git-ignored); in real deployments override with env vars.
+    public-key: ${JWT_PUBLIC_KEY:file:./keys/public.pem}
+    private-key: ${JWT_PRIVATE_KEY:file:./keys/private.pem}
+  auth:
+    refresh-token-ttl: 7d
+    refresh-cookie:
+      # "Secure" cookies are only sent over https. For plain-http local testing set
+      # BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false; keep true everywhere else.
+      secure: true

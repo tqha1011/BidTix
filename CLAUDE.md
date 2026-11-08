@@ -51,6 +51,23 @@ Full data model and concurrency strategy: [`docs/database-schema.md`](docs/datab
 
 Swagger UI: `http://localhost:8080/swagger-ui.html` · Metrics: `/actuator/prometheus`
 
+**First-time setup: JWT signing keys** (the app will not start without them; `keys/` is git-ignored)
+```bash
+mkdir -p keys
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out keys/private.pem   # PKCS#8
+openssl pkey -in keys/private.pem -pubout -out keys/public.pem
+```
+Override the locations with `JWT_PRIVATE_KEY` / `JWT_PUBLIC_KEY` (e.g. `file:/run/secrets/jwt.pem`).
+The refresh cookie is `Secure`, which browsers/curl only send over https; for plain-http local testing
+run with `BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false`.
+
+**Auth flow** (`/api/v1/auth/**`, all public): `register` → `login` returns the access JWT (RS256,
+5 min) in the body and the refresh token in an `HttpOnly; SameSite=Strict; Path=/api/v1/auth` cookie →
+`refresh` reads that cookie and rotates it (old token revoked, new one issued) → `logout` revokes it and
+clears the cookie. The database stores only the SHA-256 hash of a refresh token. Presenting an already
+used token revokes all of that user's sessions (theft response); two parallel refreshes with the same
+token cannot both win (conditional `UPDATE ... WHERE revoked_at IS NULL`).
+
 ## Package structure
 
 Package-by-feature under `com.bidtix`:
@@ -98,6 +115,17 @@ Inside each feature:
   `FOR UPDATE SKIP LOCKED` so multiple app instances can run them safely.
 - DB constraints are the last line of defence (unique indexes, `CHECK`s). Do not remove them to "fix"
   a failing operation; handle the constraint violation instead.
+
+**Errors**
+- Services throw `BusinessException(ErrorCode.X)`; they never build HTTP responses. Add new errors to
+  `ErrorCode` (the enum name is the stable `code` clients branch on, so never rename a released one).
+- `GlobalExceptionHandler` (`config/exceptions`) is the only place exceptions become responses. The
+  format is RFC 9457 `ProblemDetail` plus a `code` field. 401/403 from the security filters go through
+  `RestAuthenticationEntryPoint` / `RestAccessDeniedHandler`, which delegate to the same handler.
+- Never return stack traces, SQL or constraint names to the client (log them). Wrong password, unknown
+  email and locked account must return the same `INVALID_CREDENTIALS` response.
+- Catch `DataIntegrityViolationException` for known constraints and throw a specific
+  `BusinessException` (e.g. `SEAT_UNAVAILABLE`); the generic 409 handler is only a safety net.
 
 **Idempotency**
 - `POST /orders`, `POST /auctions/{id}/bids` and `POST /orders/{code}/payments` require an

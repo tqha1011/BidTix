@@ -2,23 +2,23 @@ package com.bidtix.config.security;
 
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.oauth2.jose.jws.SignatureAlgorithm;
-import org.springframework.security.oauth2.jwt.JwsHeader;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
+import org.springframework.security.oauth2.jwt.*;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 @Service
 @RequiredArgsConstructor
 public class JwtUtil {
 
-    private final JwtEncoder jwtEncoder;
+    public static final Duration ACCESS_TOKEN_TTL = Duration.ofMinutes(5);
 
-    public String generateToken(UserPrincipal userPrincipal) {
+    private final JwtEncoder jwtEncoder;
+    private final JwtDecoder jwtDecoder;
+
+    public String generateAccessToken(UserPrincipal userPrincipal) {
         Instant now = Instant.now();
 
         // set payload claims
@@ -27,12 +27,16 @@ public class JwtUtil {
                 .issuer("bidtix")
                 .audience(List.of("bidtix-api"))
                 .issuedAt(now)
-                .expiresAt(now.plus(5, ChronoUnit.MINUTES)) // Token valid for 5 minutes
+                .expiresAt(now.plus(ACCESS_TOKEN_TTL))
                 .claim("roles", List.of(userPrincipal.getRole().name()))
                 .build();
 
         // set headers
         JwsHeader jwsHeader = JwsHeader.with(SignatureAlgorithm.RS256).build();
         return jwtEncoder.encode(JwtEncoderParameters.from(jwsHeader, claims)).getTokenValue();
+    }
+
+    public String extractSubject(String token) {
+        return jwtDecoder.decode(token).getSubject();
     }
 }
