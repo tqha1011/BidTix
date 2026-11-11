@@ -33,3 +33,6 @@ build/
 .vscode/
 
 .env
+### JWT signing keys (never commit) ###
+keys/
+*.pem

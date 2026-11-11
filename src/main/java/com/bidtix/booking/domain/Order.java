@@ -44,6 +44,10 @@ public class Order extends AuditableEntity {
     @Column(name = "status", nullable = false, length = 20)
     private OrderStatus status = OrderStatus.PENDING_PAYMENT;
 
+    /** Unique order code for display and search. */
+    @Column(name = "order_code", nullable = false, updatable = false, length = 20)
+    private String orderCode;
+
     /** VND; always the sum of the items. */
     @Column(name = "total_amount", nullable = false)
     private long totalAmount;
@@ -65,10 +69,11 @@ public class Order extends AuditableEntity {
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItem> items = new ArrayList<>();
 
-    public Order(Long userId, Long eventId, OrderSource source, Instant expiresAt) {
+    public Order(Long userId, Long eventId,String orderCode ,OrderSource source, Instant expiresAt) {
         this.userId = userId;
         this.eventId = eventId;
         this.source = source;
+        this.orderCode = orderCode;
         this.expiresAt = expiresAt;
     }
 
@@ -77,6 +82,15 @@ public class Order extends AuditableEntity {
         items.add(item);
         totalAmount = Math.addExact(totalAmount, item.getSubtotal());
         return item;
+    }
+
+    /** PENDING_PAYMENT -> PAID. Concurrent changes are caught by {@code @Version} on flush. */
+    public void markPaid(Instant now) {
+        if (status != OrderStatus.PENDING_PAYMENT) {
+            throw new IllegalStateException("Only a pending order can be paid, but it is " + status);
+        }
+        this.status = OrderStatus.PAID;
+        this.paidAt = now;
     }
 
     public List<OrderItem> getItems() {

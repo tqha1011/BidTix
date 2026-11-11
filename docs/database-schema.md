@@ -8,7 +8,7 @@ explains the model, the business rules behind it, and the concurrency strategy.
 `src/main/resources/db/migration/<module>/V{n}__*.sql`. Flyway scans the subfolders recursively.
 Version numbers are global across modules, so a new migration always takes the next free number.
 
-| Version | Module | Tables |
+| Version | Module | Tables / change |
 |---|---|---|
 | V1 | `user` | `users` |
 | V2 | `auth` | `refresh_tokens` |
@@ -19,13 +19,19 @@ Version numbers are global across modules, so a new migration always takes the n
 | V7 | `common` | `idempotency_keys` |
 | V8 | `booking` | partial unique `ux_tickets_active_seat` |
 | V9 | `auction` | partial unique `ux_auctions_active_seat`, `ux_auction_offers_one_pending` |
+| V10 | `event` | `ticket_zones.public_id` |
+| V11 | `booking` | `orders.order_code` (existing orders are backfilled as `ORDER_` + zero-padded id) |
+| V12 | `event` | `seats.public_id` |
 
 ## Conventions
 
 - PK: `id BIGINT GENERATED ALWAYS AS IDENTITY`, internal only and never exposed by the API.
 - `public_id UUID NOT NULL DEFAULT gen_random_uuid()` + `UNIQUE` on tables exposed through the API:
-  `users`, `events`, `orders`, `tickets`, `payments`, `auctions`, `bids`. A ticket's `public_id` is also
-  its QR payload.
+  `users`, `events`, `ticket_zones`, `seats`, `orders`, `tickets`, `payments`, `auctions`, `bids`.
+  A ticket's `public_id` is also its QR payload. Zones and seats are public because users pick them
+  (zone list, seat map).
+- `orders.order_code` is a second identifier, meant for people (shown to customers, quoted to support).
+  The API still identifies an order by `public_id`.
 - Money is `BIGINT` in VND. Time is `TIMESTAMPTZ`.
 - Enums are `VARCHAR` + `CHECK`. Strings use `VARCHAR`, never `CHAR`, so Hibernate `validate` maps them cleanly.
 - Mutable aggregates have `version BIGINT` for optimistic locking: `events`, `ticket_zones`, `seats`,
@@ -63,6 +69,8 @@ users ──< idempotency_keys
 **booking**
 - `orders.source` is `BOOKING` or `AUCTION`. Status: `PENDING_PAYMENT → PAID | EXPIRED | CANCELLED`,
   `PAID → REFUNDED`. `paid_at` is required once paid.
+- `orders.order_code`: `VARCHAR(20)`, `NOT NULL`, `UNIQUE`, shape `ORDER_<digits>`. The unique constraint is
+  the safety net, so code generation must cope with a collision (retry), especially under concurrent orders.
 - `order_items.unit_price` is a price snapshot. A seated item always has `quantity = 1`.
 - `tickets` exist only after a successful payment. `used_at` is set exactly when the status is `USED` (check-in).
 
