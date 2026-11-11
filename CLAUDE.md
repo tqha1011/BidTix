@@ -18,22 +18,28 @@ no double-sold seats, no lost bids, safe retries (**idempotency**), clear **tran
 **caching** that never compromises correctness.
 
 Full data model and concurrency strategy: [`docs/database-schema.md`](docs/database-schema.md).
+Why the booking code is shaped the way it is: [`docs/ADR/`](docs/ADR) (read these before changing the
+seat-hold or payment flow).
 
 ## Tech stack
 
 - Java 21, Spring Boot 4.1.2 (webmvc, data-jpa, security, oauth2-resource-server, actuator)
 - PostgreSQL (source of truth), Flyway (migrations); Redis (cache / fast-path gate / rate limit) is planned
 - Self-issued JWT (access + rotating refresh token); the app verifies its own tokens as a resource server
-- Mock payment provider with asynchronous webhook callbacks (planned)
+- Payment: `PaymentGateway` interface with a `MockPaymentGateway` that always succeeds (synchronous);
+  the real provider with asynchronous webhook callbacks is planned
 - Lombok, springdoc-openapi (Swagger UI); the Micrometer Prometheus registry is on the classpath but its
   endpoint is not exposed yet
-- Tests: JUnit 5, Mockito, MockMvc, Spring Security test; Testcontainers (real Postgres + Redis) is planned
+- Tests: JUnit 5, Mockito, MockMvc, Spring Security test, Testcontainers (real Postgres; Docker is
+  required to run the integration tests). A Redis container will be added with Redis.
 
-> Status: schema (Flyway V1–V12), JPA entities, the `auth` module and global error handling are done.
-> Everything else (events API, booking, auction, payment, idempotency filter) is so far only schema and
-> entities. Redis and Testcontainers are planned but not yet in `pom.xml` / `compose.yaml`; add them
-> before writing code that depends on them. Until Testcontainers exists,
-> `BidtixBackendApplicationTests.contextLoads` fails (tests have no database); every other test passes.
+> Status: schema (Flyway V1–V12), JPA entities, the `auth` module, global error handling, Testcontainers
+> and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats, mock payment, issue
+> tickets) are done. The booking flow is service-only: there is no controller or endpoint for it yet, and
+> GENERAL_ADMISSION zones are not implemented (`seatPublicIds` is `null` there, so the flow fails).
+> Not started: events API, hold-expiry sweeper, auction, real payment provider and webhooks, idempotency
+> filter. Redis is planned but not yet in `pom.xml` / `compose.yaml`; add it before writing code that
+> depends on it.
 
 **Entity mapping conventions**
 - `BaseEntity` (id + `created_at`) / `AuditableEntity` (+ `updated_at`) in `common/domain`.
@@ -50,7 +56,7 @@ Full data model and concurrency strategy: [`docs/database-schema.md`](docs/datab
 
 ```bash
 ./mvnw spring-boot:run                 # run app; spring-boot-docker-compose starts services from compose.yaml
-./mvnw test                            # all tests (contextLoads fails until Testcontainers is added)
+./mvnw test                            # all tests (needs Docker: integration tests start PostgreSQL)
 ./mvnw test -Dtest=ClassName#method    # single test
 ./mvnw clean package                   # build jar
 ```
@@ -75,6 +81,21 @@ run with `BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false`.
 clears the cookie. The database stores only the SHA-256 hash of a refresh token. Presenting an already
 used token revokes all of that user's sessions (theft response); two parallel refreshes with the same
 token cannot both win (conditional `UPDATE ... WHERE revoked_at IS NULL`).
+
+**Booking flow** (`BookingService.bookTicket`, SEATED zones only, no HTTP endpoint yet). Decisions and
+alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) and
+[ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md). The method is deliberately **not**
+`@Transactional`; it runs three steps with `TransactionTemplate`:
+1. `reserve` (transaction): validate, insert a `PENDING_PAYMENT` order, then hold the seats with one
+   conditional `UPDATE` whose row count must equal the number of seats (ids sorted ascending). A short
+   count throws `SEAT_UNAVAILABLE` with the lost `seatPublicIds` and rolls everything back.
+2. `PaymentGateway.charge` (no transaction open). `MockPaymentGateway` always returns `true`. On `false`
+   the method returns the `PENDING_PAYMENT` result and the seats stay held until they expire.
+3. `completePayment` (transaction): order `PAID`, seats `HELD -> SOLD` (row count checked), tickets issued.
+   Tickets exist only for paid orders.
+
+Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`),
+and nothing releases expired holds yet.
 
 ## Architecture
 
@@ -109,12 +130,12 @@ Package-by-feature under `com.bidtix`:
 ```
 auth/      controller, service, infrastructure, dtos, domain   done: register / login / refresh / logout
 user/      domain, infrastructure                              entity + repository only, no API yet
-event/     domain                                              venues, events, ticket zones, seats
-booking/   domain                                              orders, items, tickets (holds + expiry sweeper planned)
+event/     domain, repository                                  venues, events, ticket zones, seats (no API yet)
+booking/   domain, dto, service, infrastructure                seated booking flow done; sweeper, GA, controller planned
 auction/   domain                                              auctions, bids, offers (closing job planned)
-payment/   domain                                              payments, webhook inbox (mock provider planned)
-common/    domain (BaseEntity), idempotency                    shared by every module
-config/    security, exceptions                                cross-cutting Spring setup, see below
+payment/   domain, service, infrastructure                     PaymentGateway + mock; webhook inbox entity (real provider planned)
+common/    domain (BaseEntity), utils, idempotency             shared by every module
+config/    security, exceptions, ClockConfig                   cross-cutting Spring setup, see below
 ```
 
 Layers inside a feature (create only the ones that are needed):
@@ -126,8 +147,12 @@ Layers inside a feature (create only the ones that are needed):
 - `infrastructure/` – Spring Data repositories, Redis adapters, external clients, `@ConfigurationProperties`
 
 `config/` holds cross-cutting setup rather than a business feature: `config/security` (filter chain,
-JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `UserPrincipal`) and
-`config/exceptions` (`ErrorCode`, `BusinessException`, `GlobalExceptionHandler`).
+JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `UserPrincipal`),
+`config/exceptions` (`ErrorCode`, `BusinessException`, `GlobalExceptionHandler`) and `ClockConfig` (the
+`Clock` bean; inject it instead of calling `Instant.now()` so tests can fix the time).
+
+Known inconsistency: `event` keeps its repositories in `repository/` and `booking` names its DTO package
+`dto/` (auth uses `dtos/`). New code follows the layer list above; move these when touching them.
 
 ## Rules (must follow)
 
@@ -166,6 +191,9 @@ JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `
   email and locked account must return the same `INVALID_CREDENTIALS` response.
 - Catch `DataIntegrityViolationException` for known constraints and throw a specific
   `BusinessException` (e.g. `SEAT_UNAVAILABLE`); the generic 409 handler is only a safety net.
+- A `BusinessException` can carry extra response fields:
+  `new BusinessException(code, detail, Map.of("seatPublicIds", ids))`. They are added next to `code` in
+  the body, so clients can use them (never put internal ids or SQL in them).
 
 **Idempotency**
 - `POST /orders`, `POST /auctions/{id}/bids` and `POST /orders/{code}/payments` require an
@@ -181,6 +209,11 @@ JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `
 - Every concurrency-sensitive flow needs an integration test with Testcontainers that fires N parallel
   requests (`ExecutorService` + `CountDownLatch`) and asserts invariants (e.g. sold ≤ capacity, one
   ticket per seat, final auction price = max accepted bid).
+- Integration tests extend `PostgresIntegrationTest` (`src/test/.../support`): the full application
+  against one shared PostgreSQL container, with Flyway building the schema. Each test creates its own
+  data (see `BookingConcurrencyTest.fixture`) and must not assume an empty database. Docker is required.
+- Check that a concurrency test can fail: remove the guard under test (e.g. the `status = 'AVAILABLE'`
+  condition of the seat-hold `UPDATE`) and confirm the test goes red before trusting it.
 
 ## Domain glossary
 

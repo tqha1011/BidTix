@@ -7,15 +7,18 @@ The goal is to get the hard backend problems right rather than to build a big fe
 no overselling, no double-sold seats, no lost bids, safe client retries, short and correct transactions,
 and caching that never decides who gets a ticket.
 
-> **Status: work in progress.** The foundation (database schema, entities, authentication, error handling) is
-> done and tested. The booking, auction and payment flows are designed but not implemented yet. See
-> [Roadmap](#roadmap) for exactly what exists.
+> **Status: work in progress.** The foundation (database schema, entities, authentication, error handling)
+> and the booking flow for numbered seats (hold, mock payment, tickets) are done and tested, including
+> a concurrency test against a real PostgreSQL. The booking flow has no HTTP endpoint yet, and standing
+> zones, auctions and the real payment provider are not implemented. See [Roadmap](#roadmap) for exactly
+> what exists.
 
 ## What it demonstrates
 
 | Problem | Approach | State |
 |---|---|---|
-| Two people buy the last seat | Conditional `UPDATE ... WHERE status = 'AVAILABLE'` + affected-row check; partial unique index on active tickets as the last line of defence | Schema done, flow planned |
+| Two people buy the last seat | Conditional `UPDATE ... WHERE status = 'AVAILABLE'` + affected-row check; partial unique index on active tickets as the last line of defence ([ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md)) | **Done for seated zones** (30 parallel users, 1 seat: 1 wins; 60 users on 10 seats: no seat sold twice, no deadlock) |
+| Payment call must not hold the database | Reserve in one transaction, charge with no transaction open, then complete in a second one ([ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md)) | Done with a mock provider |
 | Overselling standing tickets | Atomic `UPDATE ... SET available = available - n WHERE available >= n` + `CHECK (available BETWEEN 0 AND capacity)` | Schema done, flow planned |
 | Concurrent bids | One conditional `UPDATE` on the auction row (price, bid count, anti-sniping extension), `UNIQUE (auction_id, amount)` | Schema done, flow planned |
 | Client retries a request | `Idempotency-Key` header, request hash, replayed response | Table done, flow planned |
@@ -34,8 +37,8 @@ split into business modules by feature (package-by-feature). Inside each module 
                       one Spring Boot application, one PostgreSQL database
  ┌──────────────────────────────────────────────────────────────────────────────────┐
  │  auth     user     event     booking     auction     payment     │   common      │
- │  (done)   (entity) (entity)  (entity)    (entity)    (entity)    │   config      │
- │                                                                  │  (shared)     │
+ │  (done)   (entity) (entity)  (seated     (entity)    (mock)      │   config      │
+ │                              flow done)                          │  (shared)     │
  │   each module:   controller ──► service ──► repository ──► DB                    │
  │                  (HTTP, DTOs)  (@Transactional, rules)   (Spring Data)           │
  │                                    │                                             │
@@ -57,12 +60,13 @@ Entities in different modules reference each other by id only, never through JPA
 ## Tech stack
 
 Java 21 · Spring Boot 4 (Web MVC, Data JPA, Security, OAuth2 Resource Server, Actuator) · PostgreSQL ·
-Flyway · Lombok · springdoc-openapi · JUnit 5, Mockito, MockMvc.
-Planned: Redis, Testcontainers.
+Flyway · Lombok · springdoc-openapi · JUnit 5, Mockito, MockMvc, Testcontainers (PostgreSQL).
+Planned: Redis.
 
 ## Getting started
 
-Requirements: JDK 21 and Docker (Spring Boot starts PostgreSQL from `compose.yaml` automatically).
+Requirements: JDK 21 and Docker (Spring Boot starts PostgreSQL from `compose.yaml` automatically, and the
+integration tests start their own PostgreSQL container).
 
 ```bash
 # 1. Create the JWT signing keys (git-ignored, needed once)
@@ -110,21 +114,33 @@ Errors look like this, and clients should branch on `code`:
 ## Tests
 
 ```bash
-./mvnw test                          # everything
-./mvnw test -Dtest=AuthServiceTest   # one class
+./mvnw test                                  # everything (Docker must be running)
+./mvnw test -Dtest=AuthServiceTest           # one class
+./mvnw test -Dtest=BookingConcurrencyTest    # the booking concurrency tests
 ```
 
 Unit tests cover the auth service (rotation, reuse detection, the parallel-refresh race, locked users),
 the controllers (cookie flags, status codes), JWT validation (issuer, audience, expiry) and the error
-format for 401/403 raised in the security filters.
+format for 401/403 (including extra fields such as `seatPublicIds`).
 
-The Spring context smoke test (`BidtixBackendApplicationTests`) currently fails because tests have no
-database; it will be fixed together with the Testcontainers setup that the concurrency tests need.
+Integration tests extend `PostgresIntegrationTest` and run the whole application against a real PostgreSQL
+started by Testcontainers, with Flyway building the schema. The context smoke test
+(`BidtixBackendApplicationTests`) uses it too, so it checks the migrations and all JPA queries.
+`BookingConcurrencyTest` fires parallel bookings and asserts the invariants:
+
+- 30 users race for one seat: exactly one wins, the others get `SEAT_UNAVAILABLE` and leave no order.
+- 60 users ask for 2-3 random seats out of 10: no deadlock, no seat sold twice, none left `HELD`, and the
+  database agrees with the responses.
+
+These tests check correctness, not throughput or latency, and they do not cover standing zones or failed
+payments yet.
 
 ## Documentation
 
 - [`docs/database-schema.md`](docs/database-schema.md): tables, constraints, and the concurrency strategy
 - [`docs/ADR/`](docs/ADR): architecture decision records
+  - [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md): hold seats with a conditional UPDATE
+  - [ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md): take payment outside the transaction, issue tickets after it
 - [`CLAUDE.md`](CLAUDE.md): conventions and rules for working in this repository
 
 ## Roadmap
@@ -132,15 +148,18 @@ database; it will be fixed together with the Testcontainers setup that the concu
 - [x] Database schema (Flyway migrations V1–V12 by module) and JPA entities
 - [x] Authentication: register, login, refresh with rotation, logout, refresh token in a cookie
 - [x] Global error handling
-- [ ] Testcontainers (Postgres) and a working context test
-- [ ] Events, zones and seats API
-- [ ] Booking: seat holds, standing-zone stock, expiry sweeper, per-user ticket limit
+- [x] Testcontainers (Postgres) and a working context test
+- [x] Booking service for seated zones: seat holds, mock payment, tickets issued after payment (no HTTP endpoint yet)
+- [x] Concurrency tests for seat booking (N parallel requests, assert invariants)
+- [x] ADRs for the seat hold and the payment boundary
+- [ ] Events, zones and seats API, and the booking endpoint
+- [ ] Booking: standing-zone stock, expiry sweeper, per-user ticket limit
 - [ ] Reproduce overselling with a naive flow, then fix it (ADR)
 - [ ] Idempotency-Key filter
-- [ ] Mock payment provider with idempotent webhooks, ticket issuing
+- [ ] Real payment provider: idempotent webhooks, refund when a paid order cannot be fulfilled
 - [ ] Auctions: bidding, anti-sniping, closing job, second-chance offers
 - [ ] Redis: cache-aside, rate limiting
-- [ ] Concurrency integration tests (N parallel requests, assert invariants)
+- [ ] Concurrency tests for the remaining flows (standing zones, bids, payment failures)
 - [ ] Observability: expose a secured `/actuator/prometheus` (only `health` is exposed today)
 
 ## License
