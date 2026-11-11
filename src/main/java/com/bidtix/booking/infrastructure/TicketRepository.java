@@ -1,4 +1,4 @@
-package com.bidtix.booking.repository;
+package com.bidtix.booking.infrastructure;
 
 import com.bidtix.booking.domain.Ticket;
 import org.springframework.data.jpa.repository.JpaRepository;

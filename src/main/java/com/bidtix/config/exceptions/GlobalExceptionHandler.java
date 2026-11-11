@@ -46,7 +46,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     /** Errors our own code threw on purpose. */
     @ExceptionHandler(BusinessException.class)
     public ProblemDetail handleBusiness(BusinessException ex) {
-        return problem(ex.getErrorCode(), ex.getMessage());
+        ProblemDetail body = problem(ex.getErrorCode(), ex.getMessage());
+        ex.getProperties().forEach(body::setProperty);
+        return body;
     }
 
     /** {@code @Valid} on a request body failed: 400 plus the list of bad fields. */

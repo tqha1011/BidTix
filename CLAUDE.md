@@ -90,7 +90,7 @@ Errors:        any layer throws -> GlobalExceptionHandler (one place, one JSON f
 ```
 
 **Layer rules** (inside a module)
-- `controller` calls `service`; `service` calls `repository` and `domain`. Controllers never touch
+- `controller` calls `service`; `service` calls `infrastructure` and `domain`. Controllers never touch
   repositories or entities (they use DTOs); `domain` never depends on `controller` or `service`.
 - Business rules and transactions live in `service`. Controllers only translate HTTP to service calls and back.
 

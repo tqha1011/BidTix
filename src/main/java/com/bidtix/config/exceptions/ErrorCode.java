@@ -34,7 +34,9 @@ public enum ErrorCode {
     // --- booking (example, extend later) ---
     SEAT_UNAVAILABLE(HttpStatus.CONFLICT, "Seat is no longer available"),
     EVENT_NOTFOUND(HttpStatus.NOT_FOUND, "Event not found"),
-    ZONE_NOTFOUND(HttpStatus.NOT_FOUND, "Zone not found");
+    ZONE_NOTFOUND(HttpStatus.NOT_FOUND, "Zone not found"),
+    ORDER_NOTFOUND(HttpStatus.NOT_FOUND, "Order not found"),
+    ORDER_NOT_PAYABLE(HttpStatus.CONFLICT, "Order can no longer be paid");
 
     private final HttpStatus status;
     private final String message;

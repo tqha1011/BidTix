@@ -84,6 +84,15 @@ public class Order extends AuditableEntity {
         return item;
     }
 
+    /** PENDING_PAYMENT -> PAID. Concurrent changes are caught by {@code @Version} on flush. */
+    public void markPaid(Instant now) {
+        if (status != OrderStatus.PENDING_PAYMENT) {
+            throw new IllegalStateException("Only a pending order can be paid, but it is " + status);
+        }
+        this.status = OrderStatus.PAID;
+        this.paidAt = now;
+    }
+
     public List<OrderItem> getItems() {
         return Collections.unmodifiableList(items);
     }
