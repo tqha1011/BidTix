@@ -9,8 +9,9 @@ and caching that never decides who gets a ticket.
 
 > **Status: work in progress.** The foundation (database schema, entities, authentication, error handling)
 > and the booking flow for numbered seats (hold, mock payment, tickets) are done and tested, including
-> a concurrency test against a real PostgreSQL. The booking flow has no HTTP endpoint yet, and standing
-> zones, auctions and the real payment provider are not implemented. See [Roadmap](#roadmap) for exactly
+> a concurrency test against a real PostgreSQL. Standing zones book through the same flow (a counter
+> decrement). The booking flow has no HTTP endpoint yet, and auctions and the real payment provider are
+> not implemented. See [Roadmap](#roadmap) for exactly
 > what exists.
 
 ## What it demonstrates
@@ -19,7 +20,7 @@ and caching that never decides who gets a ticket.
 |---|---|---|
 | Two people buy the last seat | Conditional `UPDATE ... WHERE status = 'AVAILABLE'` + affected-row check; partial unique index on active tickets as the last line of defence ([ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md)) | **Done for seated zones** (30 parallel users, 1 seat: 1 wins; 60 users on 10 seats: no seat sold twice, no deadlock) |
 | Payment call must not hold the database | Reserve in one transaction, charge with no transaction open, then complete in a second one ([ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md)) | Done with a mock provider |
-| Overselling standing tickets | Atomic `UPDATE ... SET available = available - n WHERE available >= n` + `CHECK (available BETWEEN 0 AND capacity)` | Schema done, flow planned |
+| Overselling standing tickets | Atomic `UPDATE ... SET available = available - n WHERE available >= n` + `CHECK (available BETWEEN 0 AND capacity)` | Done: `UPDATE ... WHERE available_quantity >= n` + row count, concurrency test ([ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md)) |
 | Concurrent bids | One conditional `UPDATE` on the auction row (price, bid count, anti-sniping extension), `UNIQUE (auction_id, amount)` | Schema done, flow planned |
 | Client retries a request | `Idempotency-Key` header, request hash, replayed response | Table done, flow planned |
 | Stolen refresh token | Rotation + reuse detection; parallel use of one token decided by a conditional `UPDATE` (verified with 10 simultaneous requests: 1 wins, 9 rejected) | **Done** |
@@ -105,6 +106,10 @@ curl -b jar.txt -c jar.txt -X POST $B/logout       # revokes it and clears the c
 | `POST /api/v1/auth/refresh` | `200`, new access token and a rotated refresh cookie; `401` if missing, expired or already used |
 | `POST /api/v1/auth/logout` | `204`, always, and the cookie is cleared |
 
+**Sample data (dev only):** `make run-seed` starts the app and, on an empty database, creates `admin@bidtix.dev`,
+`organizer@bidtix.dev` and `customer1..3@bidtix.dev` (all with password `Password123!`), two venues, two `DRAFT`
+events with seated and standing zones, and six paid tickets. Running it again does nothing. Never enable it in production.
+
 Management endpoints (Bearer token with the right role, otherwise `403` with `code: FORBIDDEN`):
 
 | Endpoint | Role | Result |
@@ -140,9 +145,10 @@ started by Testcontainers, with Flyway building the schema. The context smoke te
 - 30 users race for one seat: exactly one wins, the others get `SEAT_UNAVAILABLE` and leave no order.
 - 60 users ask for 2-3 random seats out of 10: no deadlock, no seat sold twice, none left `HELD`, and the
   database agrees with the responses.
+- Standing zone: 30 users race for the last ticket (exactly one wins), and 60 users ask for 1-5 tickets each
+  out of 20: the counter never goes negative, never loses an update and equals capacity minus tickets sold.
 
-These tests check correctness, not throughput or latency, and they do not cover standing zones or failed
-payments yet.
+These tests check correctness, not throughput or latency, and they do not cover failed payments yet.
 
 ## Documentation
 
@@ -163,13 +169,15 @@ payments yet.
 - [x] ADRs for the seat hold and the payment boundary
 - [x] Venue / event / zone+seats creation and the admin ticket list, with role checks
 - [ ] Event publish and browse API, and the booking endpoint
-- [ ] Booking: standing-zone stock, expiry sweeper, per-user ticket limit
+- [x] Booking of standing zones: counter decrement, 5 tickets per order, concurrency tests
+- [ ] Booking: expiry sweeper (seats and GA quantity), per-user ticket limit
+- [x] Benchmark harness for anti-overselling strategies, [docs/benchmarks.md](docs/benchmarks.md) (strategies to be implemented and compared)
 - [ ] Reproduce overselling with a naive flow, then fix it (ADR)
 - [ ] Idempotency-Key filter
 - [ ] Real payment provider: idempotent webhooks, refund when a paid order cannot be fulfilled
 - [ ] Auctions: bidding, anti-sniping, closing job, second-chance offers
 - [ ] Redis: cache-aside, rate limiting
-- [ ] Concurrency tests for the remaining flows (standing zones, bids, payment failures)
+- [ ] Concurrency tests for the remaining flows (bids, payment failures)
 - [ ] Observability: expose a secured `/actuator/prometheus` (only `health` is exposed today)
 
 ## License

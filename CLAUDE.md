@@ -35,8 +35,8 @@ seat-hold or payment flow).
 
 > Status: schema (Flyway V1–V13), JPA entities, the `auth` module, global error handling, Testcontainers
 > and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats, mock payment, issue
-> tickets) are done. The booking flow is service-only: there is no controller or endpoint for it yet, and
-> GENERAL_ADMISSION zones are not implemented (`seatPublicIds` is `null` there, so the flow fails).
+> tickets) are done, and so is the flow for **GENERAL_ADMISSION zones** (counter decrement). The booking
+> flow is service-only: there is no controller or endpoint for it yet.
 > Role-protected management endpoints exist (`@PreAuthorize`, roles come from the JWT `roles` claim):
 > `POST /venues` (ADMIN), `POST /events` and `POST /events/{id}/zones` (ORGANIZER; the zone call creates a
 > SEATED zone's seats in bulk), `GET /admin/events/{id}/tickets` (ADMIN). Only CUSTOMERs can register, so
@@ -56,7 +56,8 @@ seat-hold or payment flow).
 ## Commands
 
 `make help` lists shortcuts for everything below (`make run-local`, `make test`, `make test-one T=ClassName`,
-`make keys`, `make psql`, ...). The raw commands:
+`make keys`, `make psql`, `make bench`, ...). `make bench` runs the slow anti-overselling benchmark
+([`docs/benchmarks.md`](docs/benchmarks.md)); tests tagged `benchmark` are skipped by `make test`. The raw commands:
 
 ```bash
 ./mvnw spring-boot:run                 # run app; spring-boot-docker-compose starts services from compose.yaml
@@ -86,20 +87,25 @@ clears the cookie. The database stores only the SHA-256 hash of a refresh token.
 used token revokes all of that user's sessions (theft response); two parallel refreshes with the same
 token cannot both win (conditional `UPDATE ... WHERE revoked_at IS NULL`).
 
-**Booking flow** (`BookingService.bookTicket`, SEATED zones only, no HTTP endpoint yet). Decisions and
-alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) and
-[ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md). The method is deliberately **not**
-`@Transactional`; it runs three steps with `TransactionTemplate`:
-1. `reserve` (transaction): validate, insert a `PENDING_PAYMENT` order, then hold the seats with one
-   conditional `UPDATE` whose row count must equal the number of seats (ids sorted ascending). A short
-   count throws `SEAT_UNAVAILABLE` with the lost `seatPublicIds` and rolls everything back.
+**Booking flow** (`BookingService.bookTicket`, SEATED and GENERAL_ADMISSION zones, no HTTP endpoint yet).
+Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) (seats),
+[ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md) (payment boundary) and
+[ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). At most
+`bidtix.booking.max-tickets-per-order` (5) tickets per order, and the zone must belong to the event. The
+method is deliberately **not** `@Transactional`; it runs three steps with `TransactionTemplate`, and returns a
+`BookingTicketSeatsResult` or a `BookingTicketQuantityResult` (both are a `BaseBookingTicketResult`):
+1. `reserve` (transaction): validate, insert a `PENDING_PAYMENT` order, then take the stock with one
+   conditional `UPDATE` whose row count is checked. SEATED: hold the seats, row count must equal the number
+   of seats (ids sorted ascending); a short count throws `SEAT_UNAVAILABLE` with the lost `seatPublicIds`.
+   GA: subtract the quantity from `available_quantity` where it is `>=` the quantity (the last write, because
+   it locks the hot counter row); 0 rows throws `ZONE_SOLD_OUT`. Either way everything rolls back.
 2. `PaymentGateway.charge` (no transaction open). `MockPaymentGateway` always returns `true`. On `false`
-   the method returns the `PENDING_PAYMENT` result and the seats stay held until they expire.
-3. `completePayment` (transaction): order `PAID`, seats `HELD -> SOLD` (row count checked), tickets issued.
-   Tickets exist only for paid orders.
+   the method returns the `PENDING_PAYMENT` result and the stock stays taken until the order expires.
+3. `completePayment` (transaction): order `PAID`; SEATED seats `HELD -> SOLD` (row count checked); tickets
+   issued (one per seat, or one per unit of a GA item). Tickets exist only for paid orders.
 
 Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`),
-and nothing releases expired holds yet.
+and nothing releases expired seat holds or returns GA quantity yet.
 
 ## Architecture
 

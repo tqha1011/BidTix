@@ -36,7 +36,7 @@ annotation would silently do nothing.
 always returns `true`. Booking depends on the interface only, so a real provider replaces the mock
 without touching the booking flow.
 
-`BookingTicketResult` describes one booking (order status, total, currency, `expiresAt`, `paidAt`) with a
+`BookingTicketSeatsResult` describes one booking (order status, total, currency, `expiresAt`, `paidAt`) with a
 list of issued tickets, which is empty until the order is paid.
 
 ### Alternatives considered

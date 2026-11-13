@@ -1,7 +1,7 @@
 package com.bidtix.booking.service;
 
 import com.bidtix.booking.dto.BookingTicketRequest;
-import com.bidtix.booking.dto.BookingTicketResult;
+import com.bidtix.booking.dto.BaseBookingTicketResult;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.event.domain.Event;
@@ -50,7 +50,7 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
     }
 
     /** Outcome of one parallel booking. */
-    private record Attempt(BookingTicketResult result, Throwable error) {
+    private record Attempt(BaseBookingTicketResult result, Throwable error) {
     }
 
     @Test
@@ -59,7 +59,7 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
         UUID seat = f.seatIds().get(0);
 
         List<Attempt> attempts = runInParallel(f.userIds().stream()
-                .<Callable<BookingTicketResult>>map(user -> () -> book(f, user, List.of(seat)))
+                .<Callable<BaseBookingTicketResult>>map(user -> () -> book(f, user, List.of(seat)))
                 .toList());
 
         List<Attempt> wins = successes(attempts);
@@ -79,7 +79,7 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
         Random random = new Random(42);   // fixed seed: a failure can be reproduced
 
         // every user wants 2-3 random seats out of the same 10, listed in a random order
-        List<Callable<BookingTicketResult>> jobs = new ArrayList<>();
+        List<Callable<BaseBookingTicketResult>> jobs = new ArrayList<>();
         for (UUID user : f.userIds()) {
             List<UUID> wanted = new ArrayList<>(f.seatIds());
             Collections.shuffle(wanted, random);
@@ -106,12 +106,12 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
 
     // ---- helpers ---------------------------------------------------------------------------------
 
-    private BookingTicketResult book(Fixture f, UUID userId, List<UUID> seats) {
+    private BaseBookingTicketResult book(Fixture f, UUID userId, List<UUID> seats) {
         return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), seats, null), userId);
     }
 
     /** Starts every job at the same instant and waits for all of them. */
-    private List<Attempt> runInParallel(List<Callable<BookingTicketResult>> jobs) throws Exception {
+    private List<Attempt> runInParallel(List<Callable<BaseBookingTicketResult>> jobs) throws Exception {
         ExecutorService pool = Executors.newFixedThreadPool(jobs.size());
         CountDownLatch ready = new CountDownLatch(jobs.size());
         CountDownLatch go = new CountDownLatch(1);

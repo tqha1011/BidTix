@@ -25,7 +25,7 @@ WHERE id IN (:seatIds) AND status = 'AVAILABLE' AND held_by_order_id IS NULL
 (`SeatRepository.updateSeatHoldBySeatIds`.) If the row count differs from the number of requested
 seats, the service throws `SEAT_UNAVAILABLE` and the whole transaction rolls back, order included.
 
-How the pieces fit together (`BookingService.reserve`):
+How the pieces fit together (`BookingService.reserveSeats`):
 
 - **The read check is only for friendly errors.** `checkAvailableSeats` rejects requests for seats that
   are visibly taken and lists them, but it is never trusted: only the UPDATE decides.
@@ -72,8 +72,8 @@ How the pieces fit together (`BookingService.reserve`):
 **Not covered yet**
 - Nothing releases an expired hold yet. The sweeper (`FOR UPDATE SKIP LOCKED`, planned) must settle its
   race with the payment step through a conditional update on the order status.
-- General admission zones use a different mechanism (a counter decremented atomically) and are not
-  implemented or tested yet.
+- General admission zones use a different mechanism, a counter decremented atomically; see
+  [ADR-0003](0003-take-general-admission-stock-with-a-conditional-update.md).
 - Tests check correctness, not throughput or latency.
 - The README roadmap item "reproduce overselling with a naive flow" has not been done as a separate
   test. The guard-removed run above is the only evidence of what happens without the conditional UPDATE.

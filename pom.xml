@@ -28,6 +28,8 @@
 	</scm>
 	<properties>
 		<java.version>21</java.version>
+		<!-- Tests tagged "benchmark" are slow, so `mvn test` skips them; `make bench` sets this to "none". -->
+		<benchmark.excludedGroups>benchmark</benchmark.excludedGroups>
 	</properties>
 	<dependencies>
 		<dependency>
@@ -124,6 +126,13 @@
 			<artifactId>testcontainers-postgresql</artifactId>
 			<scope>test</scope>
 		</dependency>
+		<!-- Redis client for the benchmark's Lua strategy only. Test scope on purpose: production code does not
+		     use Redis yet (CLAUDE.md: add it to pom.xml and compose.yaml before depending on it). -->
+		<dependency>
+			<groupId>io.lettuce</groupId>
+			<artifactId>lettuce-core</artifactId>
+			<scope>test</scope>
+		</dependency>
 	</dependencies>
 
 	<build>
@@ -131,6 +140,13 @@
 			<plugin>
 				<groupId>org.springframework.boot</groupId>
 				<artifactId>spring-boot-maven-plugin</artifactId>
+			</plugin>
+			<plugin>
+				<groupId>org.apache.maven.plugins</groupId>
+				<artifactId>maven-surefire-plugin</artifactId>
+				<configuration>
+					<excludedGroups>${benchmark.excludedGroups}</excludedGroups>
+				</configuration>
 			</plugin>
 			<plugin>
 				<groupId>org.apache.maven.plugins</groupId>
