@@ -6,21 +6,19 @@ import com.bidtix.benchmark.QuantityRequest;
 import com.bidtix.benchmark.SeatHoldRequest;
 import com.bidtix.benchmark.StrategyContext;
 
+import java.sql.Timestamp;
+import java.util.stream.Collectors;
+
 /**
- * Baseline: check-then-act with no guard. This is what the code looks like before anyone thinks about
- * concurrency, and it is expected to OVERSELL. The benchmark reports its oversell numbers but does not fail.
+ * Baseline: just take the stock and never check anything. No read, no WHERE condition on the stock, no row
+ * count. It says HELD to everybody. This is what the code looks like before anyone thinks about concurrency.
+ * The benchmark reports its numbers but does not fail it ({@link #unsafeByDesign()}).
  *
- * <p><b>TODO(you)</b>
- * <ul>
- *   <li>Seats: read the seats (are they all AVAILABLE?), and if so write HELD with a plain
- *       {@code UPDATE seats SET status='HELD', held_by_order_id=?, hold_expires_at=? WHERE id IN (...)}
- *       with <i>no</i> {@code status='AVAILABLE'} condition and no row-count check. Remember
- *       {@code ck_seats_hold_consistency}: HELD needs both the owner and the expiry.</li>
- *   <li>GA: read {@code available_quantity}, compare in Java, then write {@code read - quantity}
- *       (a lost update, not a relative decrement).</li>
- *   <li>Do the read and the write in <i>separate</i> transactions, or the default isolation hides part of the
- *       race. That is exactly the mistake this strategy is here to show.</li>
- * </ul>
+ * <p>What to expect: seats are overwritten by whoever writes last, so many clients are told they own the same
+ * seat (oversold). The counter loses updates (read, subtract in Java, write back), so more tickets are promised
+ * than the database records. Requests that would push the counter below zero are stopped by
+ * {@code ck_ticket_zones_available_range} and show up as errors: the database is the last line of defence here,
+ * not this strategy being safe.
  */
 public class NaiveStrategy implements HoldStrategy {
 
@@ -42,11 +40,28 @@ public class NaiveStrategy implements HoldStrategy {
 
     @Override
     public HoldResult holdSeats(SeatHoldRequest request) {
-        throw new UnsupportedOperationException("TODO(you): naive seat hold");
+        String ids = request.seatIds().stream().map(String::valueOf).collect(Collectors.joining(","));
+
+        // no "AND status = 'AVAILABLE'", no row count: mark the seats HELD for this order, whatever they were
+        ctx.tx().executeWithoutResult(status -> ctx.jdbc().update(
+                "update seats set status = 'HELD', held_by_order_id = ?, hold_expires_at = ? where id in (" + ids + ")",
+                request.orderId(),
+                Timestamp.from(request.expiresAt())));
+        return HoldResult.held();
     }
 
     @Override
     public HoldResult takeQuantity(QuantityRequest request) {
-        throw new UnsupportedOperationException("TODO(you): naive quantity take");
+        // Read-modify-write, the way it is written without thinking about concurrency: read the counter,
+        // subtract in Java, write the result back. No check, no row count. Two requests that read the same
+        // value both write "value - quantity", so one subtraction is lost: that is an oversell. It is not
+        // saved by the transaction: in READ COMMITTED the second read does not see the first write yet.
+        ctx.tx().executeWithoutResult(status -> {
+            Integer available = ctx.jdbc().queryForObject(
+                    "select available_quantity from ticket_zones where id = ?", Integer.class, request.zoneId());
+            int remaining = available - request.quantity();
+            ctx.jdbc().update("update ticket_zones set available_quantity = ? where id = ?", remaining, request.zoneId());
+        });
+        return HoldResult.held();
     }
 }
