@@ -2,16 +2,19 @@ package com.bidtix.config.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
-import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter;
+import org.springframework.security.oauth2.server.resource.authentication.JwtGrantedAuthoritiesConverter;
 import org.springframework.security.web.SecurityFilterChain;
 
 import static org.springframework.security.oauth2.core.authorization.OAuth2AuthorizationManagers.hasScope;
 
 @Configuration
 @EnableWebSecurity
+@EnableMethodSecurity // turns on @PreAuthorize on controller methods
 public class SecurityConfiguration {
 
     private final static String[] WHITELISTED_PATHS = {
@@ -20,10 +23,26 @@ public class SecurityConfiguration {
             "/v3/api-docs/**"
     };
 
+    /**
+     * Roles are in the {@code roles} claim of our own JWT (see {@link JwtUtil}), not in {@code scope}, which
+     * is the only claim Spring reads by default. Mapping it to {@code ROLE_*} authorities is what makes
+     * {@code @PreAuthorize("hasRole('ADMIN')")} work.
+     */
+    @Bean
+    JwtAuthenticationConverter jwtAuthenticationConverter() {
+        JwtGrantedAuthoritiesConverter authorities = new JwtGrantedAuthoritiesConverter();
+        authorities.setAuthoritiesClaimName("roles");
+        authorities.setAuthorityPrefix("ROLE_");
+        JwtAuthenticationConverter converter = new JwtAuthenticationConverter();
+        converter.setJwtGrantedAuthoritiesConverter(authorities);
+        return converter;
+    }
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http,
                                            RestAuthenticationEntryPoint authenticationEntryPoint,
-                                           RestAccessDeniedHandler accessDeniedHandler) throws Exception {
+                                           RestAccessDeniedHandler accessDeniedHandler,
+                                           JwtAuthenticationConverter jwtAuthenticationConverter) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
                 .httpBasic(AbstractHttpConfigurer::disable)
@@ -39,7 +58,7 @@ public class SecurityConfiguration {
                         .accessDeniedHandler(accessDeniedHandler)
                 )
                 .oauth2ResourceServer((oauth2) -> oauth2
-                        .jwt(Customizer.withDefaults())
+                        .jwt(jwt -> jwt.jwtAuthenticationConverter(jwtAuthenticationConverter))
                         // the bearer-token filter has its own entry point, so set it here too
                         .authenticationEntryPoint(authenticationEntryPoint)
                         .accessDeniedHandler(accessDeniedHandler)

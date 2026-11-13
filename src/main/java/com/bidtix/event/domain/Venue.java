@@ -8,11 +8,16 @@ import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
 
+import java.util.UUID;
+
 @Getter
 @Entity
 @Table(name = "venues")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class Venue extends AuditableEntity {
+
+    @Column(name = "public_id", nullable = false, updatable = false)
+    private UUID publicId = UUID.randomUUID();
 
     @Column(name = "name", nullable = false, length = 200)
     private String name;

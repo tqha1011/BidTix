@@ -33,11 +33,15 @@ seat-hold or payment flow).
 - Tests: JUnit 5, Mockito, MockMvc, Spring Security test, Testcontainers (real Postgres; Docker is
   required to run the integration tests). A Redis container will be added with Redis.
 
-> Status: schema (Flyway V1–V12), JPA entities, the `auth` module, global error handling, Testcontainers
+> Status: schema (Flyway V1–V13), JPA entities, the `auth` module, global error handling, Testcontainers
 > and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats, mock payment, issue
 > tickets) are done. The booking flow is service-only: there is no controller or endpoint for it yet, and
 > GENERAL_ADMISSION zones are not implemented (`seatPublicIds` is `null` there, so the flow fails).
-> Not started: events API, hold-expiry sweeper, auction, real payment provider and webhooks, idempotency
+> Role-protected management endpoints exist (`@PreAuthorize`, roles come from the JWT `roles` claim):
+> `POST /venues` (ADMIN), `POST /events` and `POST /events/{id}/zones` (ORGANIZER; the zone call creates a
+> SEATED zone's seats in bulk), `GET /admin/events/{id}/tickets` (ADMIN). Only CUSTOMERs can register, so
+> ADMIN/ORGANIZER users must be inserted by SQL for now.
+> Not started: event publish/browse API, hold-expiry sweeper, auction, real payment provider and webhooks, idempotency
 > filter. Redis is planned but not yet in `pom.xml` / `compose.yaml`; add it before writing code that
 > depends on it.
 
@@ -130,7 +134,7 @@ Package-by-feature under `com.bidtix`:
 ```
 auth/      controller, service, infrastructure, dtos, domain   done: register / login / refresh / logout
 user/      domain, infrastructure                              entity + repository only, no API yet
-event/     domain, repository                                  venues, events, ticket zones, seats (no API yet)
+event/     controller, dtos, service, infrastructure, domain   venue / event / zone+seats creation (organizer, admin)
 booking/   domain, dto, service, infrastructure                seated booking flow done; sweeper, GA, controller planned
 auction/   domain                                              auctions, bids, offers (closing job planned)
 payment/   domain, service, infrastructure                     PaymentGateway + mock; webhook inbox entity (real provider planned)
@@ -151,8 +155,8 @@ JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `
 `config/exceptions` (`ErrorCode`, `BusinessException`, `GlobalExceptionHandler`) and `ClockConfig` (the
 `Clock` bean; inject it instead of calling `Instant.now()` so tests can fix the time).
 
-Known inconsistency: `event` keeps its repositories in `repository/` and `booking` names its DTO package
-`dto/` (auth uses `dtos/`). New code follows the layer list above; move these when touching them.
+Known inconsistency: `booking` names its DTO package `dto/` for the booking flow but `dtos/` for the admin
+ticket list (auth uses `dtos/`). New code follows the layer list above; move `dto/` when touching it.
 
 ## Rules (must follow)
 

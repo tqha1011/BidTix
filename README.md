@@ -105,6 +105,15 @@ curl -b jar.txt -c jar.txt -X POST $B/logout       # revokes it and clears the c
 | `POST /api/v1/auth/refresh` | `200`, new access token and a rotated refresh cookie; `401` if missing, expired or already used |
 | `POST /api/v1/auth/logout` | `204`, always, and the cookie is cleared |
 
+Management endpoints (Bearer token with the right role, otherwise `403` with `code: FORBIDDEN`):
+
+| Endpoint | Role | Result |
+|---|---|---|
+| `POST /api/v1/venues` | ADMIN | `201`, a venue with its `publicId` |
+| `POST /api/v1/events` | ORGANIZER | `201`, a `DRAFT` event owned by the caller |
+| `POST /api/v1/events/{eventPublicId}/zones` | ORGANIZER (owner) | `201`, a zone; SEATED zones get all seats from `rows` (`A`: 1–20, ...) in one transaction; `409 ZONE_NAME_TAKEN` on a duplicate name |
+| `GET /api/v1/admin/events/{eventPublicId}/tickets?status=&page=&size=` | ADMIN | `200`, paginated issued tickets (size capped at 100) |
+
 Errors look like this, and clients should branch on `code`:
 
 ```json
@@ -152,7 +161,8 @@ payments yet.
 - [x] Booking service for seated zones: seat holds, mock payment, tickets issued after payment (no HTTP endpoint yet)
 - [x] Concurrency tests for seat booking (N parallel requests, assert invariants)
 - [x] ADRs for the seat hold and the payment boundary
-- [ ] Events, zones and seats API, and the booking endpoint
+- [x] Venue / event / zone+seats creation and the admin ticket list, with role checks
+- [ ] Event publish and browse API, and the booking endpoint
 - [ ] Booking: standing-zone stock, expiry sweeper, per-user ticket limit
 - [ ] Reproduce overselling with a naive flow, then fix it (ADR)
 - [ ] Idempotency-Key filter
