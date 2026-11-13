@@ -36,7 +36,12 @@ public enum ErrorCode {
     EVENT_NOTFOUND(HttpStatus.NOT_FOUND, "Event not found"),
     ZONE_NOTFOUND(HttpStatus.NOT_FOUND, "Zone not found"),
     ORDER_NOTFOUND(HttpStatus.NOT_FOUND, "Order not found"),
-    ORDER_NOT_PAYABLE(HttpStatus.CONFLICT, "Order can no longer be paid");
+    ORDER_NOT_PAYABLE(HttpStatus.CONFLICT, "Order can no longer be paid"),
+
+    // --- event ---
+    VENUE_NOTFOUND(HttpStatus.NOT_FOUND, "Venue not found"),
+    ZONE_NAME_TAKEN(HttpStatus.CONFLICT, "A zone with this name already exists for the event"),
+    EVENT_NOT_EDITABLE(HttpStatus.CONFLICT, "Only a DRAFT event can be changed");
 
     private final HttpStatus status;
     private final String message;

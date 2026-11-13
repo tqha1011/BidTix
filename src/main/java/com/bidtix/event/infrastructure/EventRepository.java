@@ -1,4 +1,4 @@
-package com.bidtix.event.repository;
+package com.bidtix.event.infrastructure;
 
 import com.bidtix.event.domain.Event;
 import org.springframework.data.jpa.repository.JpaRepository;

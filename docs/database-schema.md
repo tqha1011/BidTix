@@ -22,14 +22,15 @@ Version numbers are global across modules, so a new migration always takes the n
 | V10 | `event` | `ticket_zones.public_id` |
 | V11 | `booking` | `orders.order_code` (existing orders are backfilled as `ORDER_` + zero-padded id) |
 | V12 | `event` | `seats.public_id` |
+| V13 | `event` | `venues.public_id` |
 
 ## Conventions
 
 - PK: `id BIGINT GENERATED ALWAYS AS IDENTITY`, internal only and never exposed by the API.
 - `public_id UUID NOT NULL DEFAULT gen_random_uuid()` + `UNIQUE` on tables exposed through the API:
-  `users`, `events`, `ticket_zones`, `seats`, `orders`, `tickets`, `payments`, `auctions`, `bids`.
+  `users`, `venues`, `events`, `ticket_zones`, `seats`, `orders`, `tickets`, `payments`, `auctions`, `bids`.
   A ticket's `public_id` is also its QR payload. Zones and seats are public because users pick them
-  (zone list, seat map).
+  (zone list, seat map); venues because organizers pick one when they create an event.
 - `orders.order_code` is a second identifier, meant for people (shown to customers, quoted to support).
   The API still identifies an order by `public_id`.
 - Money is `BIGINT` in VND. Time is `TIMESTAMPTZ`.
