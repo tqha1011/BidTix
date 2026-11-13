@@ -105,6 +105,10 @@ curl -b jar.txt -c jar.txt -X POST $B/logout       # revokes it and clears the c
 | `POST /api/v1/auth/refresh` | `200`, new access token and a rotated refresh cookie; `401` if missing, expired or already used |
 | `POST /api/v1/auth/logout` | `204`, always, and the cookie is cleared |
 
+**Sample data (dev only):** `make run-seed` starts the app and, on an empty database, creates `admin@bidtix.dev`,
+`organizer@bidtix.dev` and `customer1..3@bidtix.dev` (all with password `Password123!`), two venues, two `DRAFT`
+events with seated and standing zones, and six paid tickets. Running it again does nothing. Never enable it in production.
+
 Management endpoints (Bearer token with the right role, otherwise `403` with `code: FORBIDDEN`):
 
 | Endpoint | Role | Result |

@@ -4,7 +4,7 @@
 MVN := ./mvnw
 
 .DEFAULT_GOAL := help
-.PHONY: help keys run run-local test test-one build clean db-up db-down psql
+.PHONY: help keys run run-local run-seed test test-one build clean db-up db-down psql
 
 help: ## Show this list
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -27,6 +27,9 @@ run: keys ## Run the app (PostgreSQL is started from compose.yaml automatically)
 
 run-local: keys ## Run the app with a non-Secure refresh cookie, for testing over plain http
 	BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false $(MVN) spring-boot:run
+
+run-seed: keys ## Like run-local, and fills an empty database with sample users, events and tickets (dev only)
+	BIDTIX_SEED_ENABLED=true BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false $(MVN) spring-boot:run
 
 # ---- Test and build ---------------------------------------------------------
 test: ## Run all tests (BidtixBackendApplicationTests fails until Testcontainers is added)
