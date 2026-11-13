@@ -56,7 +56,8 @@ seat-hold or payment flow).
 ## Commands
 
 `make help` lists shortcuts for everything below (`make run-local`, `make test`, `make test-one T=ClassName`,
-`make keys`, `make psql`, ...). The raw commands:
+`make keys`, `make psql`, `make bench`, ...). `make bench` runs the slow anti-overselling benchmark
+([`docs/benchmarks.md`](docs/benchmarks.md)); tests tagged `benchmark` are skipped by `make test`. The raw commands:
 
 ```bash
 ./mvnw spring-boot:run                 # run app; spring-boot-docker-compose starts services from compose.yaml

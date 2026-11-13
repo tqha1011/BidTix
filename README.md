@@ -171,6 +171,7 @@ These tests check correctness, not throughput or latency, and they do not cover 
 - [ ] Event publish and browse API, and the booking endpoint
 - [x] Booking of standing zones: counter decrement, 5 tickets per order, concurrency tests
 - [ ] Booking: expiry sweeper (seats and GA quantity), per-user ticket limit
+- [x] Benchmark harness for anti-overselling strategies, [docs/benchmarks.md](docs/benchmarks.md) (strategies to be implemented and compared)
 - [ ] Reproduce overselling with a naive flow, then fix it (ADR)
 - [ ] Idempotency-Key filter
 - [ ] Real payment provider: idempotent webhooks, refund when a paid order cannot be fulfilled

@@ -4,7 +4,7 @@
 MVN := ./mvnw
 
 .DEFAULT_GOAL := help
-.PHONY: help keys run run-local run-seed test test-one build clean db-up db-down psql
+.PHONY: help keys run run-local run-seed test bench test-one build clean db-up db-down psql
 
 help: ## Show this list
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -38,6 +38,10 @@ test: ## Run all tests (BidtixBackendApplicationTests fails until Testcontainers
 test-one: ## Run one test: make test-one T=AuthServiceTest  (or T=AuthServiceTest#login_issuesTokens...)
 	@test -n "$(T)" || { echo "usage: make test-one T=ClassName[#method]"; exit 1; }
 	$(MVN) test -Dtest='$(T)'
+
+bench: ## Run the anti-overselling benchmark (slow, Docker): make bench [ONLY=optimistic] [RUNS=3]
+	$(MVN) test -Dgroups=benchmark -Dbenchmark.excludedGroups=none -Dtest='StrategyBenchmarkTest,RedisGateCrashTest' \
+		$(if $(ONLY),-Dbench.only=$(ONLY)) $(if $(RUNS),-Dbench.runs=$(RUNS))
 
 build: ## Build the jar without running tests
 	$(MVN) clean package -DskipTests
