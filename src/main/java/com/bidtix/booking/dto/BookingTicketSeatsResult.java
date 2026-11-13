@@ -7,13 +7,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
-/**
- * Outcome of a booking: one order plus the tickets issued for it.
- * <p>
- * {@code tickets} is empty while {@code status} is {@code PENDING_PAYMENT} (seats are held, payment
- * not completed); tickets exist only once the order is {@code PAID}.
- */
-public record BookingTicketResult(
+/** Booking of a SEATED zone: every ticket is tied to one seat. */
+public record BookingTicketSeatsResult(
         String orderCode,
         OrderStatus status,
         long totalAmount,       // VND
@@ -26,16 +21,15 @@ public record BookingTicketResult(
         Instant startsAt,
         Instant endsAt,
         ZoneType zoneType,
-        List<TicketInfo> tickets
-) {
+        List<TicketSeatsInfo> tickets
+) implements BaseBookingTicketResult {
 
-    /** {@code rowLabel} and {@code seatNumber} are null for general admission tickets. */
-    public record TicketInfo(UUID ticketPublicId, String rowLabel, Integer seatNumber) {
+    public record TicketSeatsInfo(UUID ticketPublicId, String rowLabel, Integer seatNumber) implements TicketRef {
     }
 
     /** Same booking after payment: new status, paid time and the issued tickets. */
-    public BookingTicketResult withPayment(OrderStatus newStatus, Instant newPaidAt, List<TicketInfo> newTickets) {
-        return new BookingTicketResult(orderCode, newStatus, totalAmount, currency, expiresAt, newPaidAt,
+    public BookingTicketSeatsResult withPayment(OrderStatus newStatus, Instant newPaidAt, List<TicketSeatsInfo> newTickets) {
+        return new BookingTicketSeatsResult(orderCode, newStatus, totalAmount, currency, expiresAt, newPaidAt,
                 username, eventName, address, startsAt, endsAt, zoneType, newTickets);
     }
 }

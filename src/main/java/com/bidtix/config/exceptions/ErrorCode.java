@@ -37,6 +37,7 @@ public enum ErrorCode {
     ZONE_NOTFOUND(HttpStatus.NOT_FOUND, "Zone not found"),
     ORDER_NOTFOUND(HttpStatus.NOT_FOUND, "Order not found"),
     ORDER_NOT_PAYABLE(HttpStatus.CONFLICT, "Order can no longer be paid"),
+    ZONE_SOLD_OUT(HttpStatus.CONFLICT, "Not enough tickets left in this zone"),
 
     // --- event ---
     VENUE_NOTFOUND(HttpStatus.NOT_FOUND, "Venue not found"),
