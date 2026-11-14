@@ -44,7 +44,8 @@ public class NaiveStrategy implements HoldStrategy {
 
         // no "AND status = 'AVAILABLE'", no row count: mark the seats HELD for this order, whatever they were
         ctx.tx().executeWithoutResult(status -> ctx.jdbc().update(
-                "update seats set status = 'HELD', held_by_order_id = ?, hold_expires_at = ? where id in (" + ids + ")",
+                "update seats set status = 'HELD', held_by_order_id = ?, " +
+                        "hold_expires_at = ? where id in (" + ids + ")",
                 request.orderId(),
                 Timestamp.from(request.expiresAt())));
         return HoldResult.held();
