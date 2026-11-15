@@ -6,6 +6,7 @@ import com.bidtix.auth.dtos.LoginRequest;
 import com.bidtix.auth.dtos.RegisterRequest;
 import com.bidtix.auth.dtos.RegisterResponse;
 import com.bidtix.auth.service.AuthService;
+import com.bidtix.config.ratelimit.RateLimited;
 import com.bidtix.config.security.JwtUtil;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
@@ -33,12 +34,14 @@ public class AuthController {
     private final AuthService authService;
     private final RefreshTokenCookies refreshTokenCookies;
 
+    @RateLimited(policy = "auth-register")
     @PostMapping("/register")
     public ResponseEntity<RegisterResponse> register(@Valid @RequestBody RegisterRequest request) {
         var user = authService.register(request.email(), request.password(), request.fullName());
         return ResponseEntity.status(HttpStatus.CREATED).body(RegisterResponse.from(user));
     }
 
+    @RateLimited(policy = "auth-login")
     @PostMapping("/login")
     public ResponseEntity<AccessTokenResponse> login(@Valid @RequestBody LoginRequest request) {
         return tokenResponse(authService.login(request.email(), request.password()));

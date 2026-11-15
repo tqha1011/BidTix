@@ -46,7 +46,8 @@ seat-hold or payment flow).
 > a short TTL, and publishing evicts the event pages. Only CUSTOMERs can register, so ADMIN/ORGANIZER users must be
 > inserted by SQL for now.
 > Not started: event cancel and update, hold-expiry sweeper, auction, real payment provider and webhooks,
-> idempotency filter. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
+> idempotency filter. Rate limits exist for login, register and logged-in callers; the other public routes need
+> `@RateLimited` when they are added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
 
 **Entity mapping conventions**
@@ -218,6 +219,19 @@ ticket list (auth uses `dtos/`). New code follows the layer list above; move `dt
 **Caching**
 - Cache-aside with explicit TTLs; evict on write. Cached availability is a hint for reads only; every
   purchase or bid is validated against the DB.
+- A `@Cacheable` that can be hit by many requests at once uses `sync = true`. That only works because `CacheConfig`
+  uses a locking cache writer (with the default writer, 16 simultaneous requests caused 16 DB loads).
+
+**Rate limiting** (`config/ratelimit`)
+- Counters live in Redis (one Lua script each), configured under `bidtix.rate-limit.policies` in application.yaml.
+  A policy is `fixed-window` (`limit`, `window`) or `token-bucket` (`capacity`, `refill-tokens`, `refill-every`; the
+  refill is worked out when a request arrives, there is no background job), plus `fail-open`. Today: login and
+  register are fixed windows per IP, `default-user` is a bucket of 15 tokens refilled by 3 every 10 s. `RateLimitInterceptor` runs after Spring Security, on `/api/**`: a controller
+  method or class with `@RateLimited(policy = ..., by = IP|USER)` uses that policy; otherwise a logged-in caller gets
+  `default-user`. Too many requests: 429 `TOO_MANY_REQUESTS` with `Retry-After`; Redis unreachable: fail-open policies
+  let the request through, fail-closed ones answer 503 `RATE_LIMITER_UNAVAILABLE` (keep login and register fail-closed).
+- An endpoint that needs no login must have `@RateLimited` (by IP): without it nothing limits it. Behind a proxy set
+  `server.forward-headers-strategy`, or every caller shares the proxy's IP.
 
 **Testing**
 - Every concurrency-sensitive flow needs an integration test with Testcontainers that fires N parallel
