@@ -39,11 +39,12 @@ test-one: ## Run one test: make test-one T=AuthServiceTest  (or T=AuthServiceTes
 	@test -n "$(T)" || { echo "usage: make test-one T=ClassName[#method]"; exit 1; }
 	$(MVN) test -Dtest='$(T)'
 
-bench: ## Run the anti-overselling benchmark (slow, Docker): make bench [ONLY=optimistic] [RUNS=3] [THREADS=500] [SCALE=5] [VIRTUAL=true]
+bench: ## Run the anti-overselling benchmark (slow, Docker): make bench [ONLY=optimistic] [RUNS=3] [THREADS=500] [SCALE=5] [VIRTUAL=true] [RATIOS=0.1,1,10 [REQUESTS=20000]]
 	$(MVN) test -Dgroups=benchmark -Dbenchmark.excludedGroups=none -Dtest='StrategyBenchmarkTest,RedisGateCrashTest' \
 		$(if $(ONLY),-Dbench.only=$(ONLY)) $(if $(RUNS),-Dbench.runs=$(RUNS)) \
 		$(if $(THREADS),-Dbench.threads=$(THREADS)) $(if $(SCALE),-Dbench.scale=$(SCALE)) \
-		$(if $(VIRTUAL),-Dbench.virtual=$(VIRTUAL))
+		$(if $(VIRTUAL),-Dbench.virtual=$(VIRTUAL)) \
+		$(if $(RATIOS),-Dbench.ratios=$(RATIOS)) $(if $(REQUESTS),-Dbench.requests=$(REQUESTS))
 
 build: ## Build the jar without running tests
 	$(MVN) clean package -DskipTests

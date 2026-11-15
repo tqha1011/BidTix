@@ -5,9 +5,10 @@ import com.bidtix.benchmark.InvariantChecker.Verdict;
 import com.bidtix.benchmark.RunInfo.Kind;
 
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.Callable;
 
 /** Runs one strategy on one scenario: build data, hit it from N threads, judge the database, compute statistics. */
@@ -24,7 +25,7 @@ public final class BenchmarkRunner {
     /** @param virtualThreads run the simulated users on virtual threads instead of platform threads */
     public BenchmarkRunner(StrategyContext ctx, boolean virtualThreads) {
         this.ctx = ctx;
-        this.fixture = new BenchmarkFixture(ctx.em(), ctx.tx());
+        this.fixture = new BenchmarkFixture(ctx.em(), ctx.tx(), ctx.jdbc());
         this.virtualThreads = virtualThreads;
     }
 
@@ -71,10 +72,15 @@ public final class BenchmarkRunner {
         List<List<Long>> wanted = new ArrayList<>();
         List<Callable<HoldResult>> jobs = new ArrayList<>();
         for (int i = 0; i < sc.requests(); i++) {
-            List<Long> seats = new ArrayList<>(data.seatIds());
-            Collections.shuffle(seats, random);   // deliberately not sorted
-            int count = Math.min(sc.minPerRequest() + random.nextInt(sc.maxPerRequest() - sc.minPerRequest() + 1), seats.size());
-            List<Long> pick = List.copyOf(seats.subList(0, count));
+            int count = Math.min(sc.minPerRequest() + random.nextInt(sc.maxPerRequest() - sc.minPerRequest() + 1),
+                    data.seatIds().size());
+            // a few distinct random seats, deliberately not sorted. Shuffling the whole seat list for every
+            // request would cost O(seats) each: far too slow with hundreds of thousands of seats.
+            Set<Integer> indexes = new LinkedHashSet<>();
+            while (indexes.size() < count) {
+                indexes.add(random.nextInt(data.seatIds().size()));
+            }
+            List<Long> pick = indexes.stream().map(data.seatIds()::get).toList();
             wanted.add(pick);
             var request = new SeatHoldRequest(data.zoneId(), pick, data.orderIds().get(i), data.expiresAt());
             jobs.add(() -> strategy.holdSeats(request));

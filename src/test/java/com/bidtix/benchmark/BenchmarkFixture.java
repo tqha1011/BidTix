@@ -1,21 +1,18 @@
 package com.bidtix.benchmark;
 
-import com.bidtix.booking.domain.Order;
-import com.bidtix.booking.domain.OrderSource;
-import com.bidtix.common.utils.GenerateOrderCode;
 import com.bidtix.event.domain.Event;
-import com.bidtix.event.domain.Seat;
 import com.bidtix.event.domain.TicketZone;
 import com.bidtix.event.domain.Venue;
 import com.bidtix.event.domain.ZoneType;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.domain.UserRole;
 import jakarta.persistence.EntityManager;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -31,37 +28,41 @@ public final class BenchmarkFixture {
 
     private final EntityManager em;
     private final TransactionTemplate tx;
+    private final JdbcTemplate jdbc;
 
-    public BenchmarkFixture(EntityManager em, TransactionTemplate tx) {
+    public BenchmarkFixture(EntityManager em, TransactionTemplate tx, JdbcTemplate jdbc) {
         this.em = em;
         this.tx = tx;
+        this.jdbc = jdbc;
     }
 
+    /**
+     * Seats and orders are created with one {@code INSERT ... SELECT generate_series} each: persisting hundreds of
+     * thousands of entities one by one would take longer than the run being measured. The orders all belong to one
+     * simulated user (nothing in the schema limits orders per user).
+     */
     public Seated seated(int seats, int customers) {
         return tx.execute(status -> {
             Event event = newEvent();
             TicketZone zone = new TicketZone(event, "Seated", ZoneType.SEATED, 500_000, seats);
             em.persist(zone);
-
-            List<Long> seatIds = new ArrayList<>();
-            for (int i = 1; i <= seats; i++) {
-                Seat seat = new Seat(zone, "A", i);
-                em.persist(seat);
-                seatIds.add(seat.getId());
-            }
-
-            String run = suffix();
-            Instant expiresAt = Instant.now().plus(15, ChronoUnit.MINUTES);
-            List<Long> orderIds = new ArrayList<>();
-            for (int i = 0; i < customers; i++) {
-                User user = new User("bench" + i + "-" + run + "@test.dev", "hash", "Bench " + i, UserRole.CUSTOMER);
-                em.persist(user);
-                Order order = new Order(user.getId(), event.getId(), GenerateOrderCode.generate(),
-                        OrderSource.BOOKING, expiresAt);
-                em.persist(order);
-                orderIds.add(order.getId());
-            }
+            User user = new User("bench-" + suffix() + "@test.dev", "hash", "Bench", UserRole.CUSTOMER);
+            em.persist(user);
             em.flush();
+
+            jdbc.update("insert into seats (zone_id, row_label, seat_number) "
+                    + "select ?, 'A', g from generate_series(1, ?) g", zone.getId(), seats);
+            List<Long> seatIds = jdbc.queryForList(
+                    "select id from seats where zone_id = ? order by id", Long.class, zone.getId());
+
+            Instant expiresAt = Instant.now().plus(15, ChronoUnit.MINUTES);
+            // order_code: "ORDER_" + 14 random hex digits = 20 chars, the width of the column
+            jdbc.update("insert into orders (user_id, event_id, source, total_amount, expires_at, order_code) "
+                            + "select ?, ?, 'BOOKING', 0, ?, 'ORDER_' || upper(substr(md5(gen_random_uuid()::text), 1, 14)) "
+                            + "from generate_series(1, ?)",
+                    user.getId(), event.getId(), Timestamp.from(expiresAt), customers);
+            List<Long> orderIds = jdbc.queryForList(
+                    "select id from orders where event_id = ? order by id", Long.class, event.getId());
             return new Seated(zone.getId(), seatIds, orderIds, expiresAt);
         });
     }

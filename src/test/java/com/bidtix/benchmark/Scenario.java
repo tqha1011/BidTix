@@ -19,6 +19,23 @@ public record Scenario(String name, Kind kind, int inventory, int requests, int 
      * keep them all busy. The inventory grows by the same factor to keep the ratio of stock to requests, except
      * for a single seat ({@code seat-hot}): its whole point is that everybody fights for ONE seat.
      */
+    /**
+     * One seated and one standing scenario per stock ratio, with the same number of requests, so that the only
+     * thing that changes between them is how much stock there is. {@code ratio} is stock divided by demand:
+     * 0.1 = ten times more tickets wanted than exist, 10 = ten times more tickets than anybody asks for.
+     * A request wants 2-3 seats (average 2.5) or 1-4 tickets (average 2.5).
+     */
+    public static List<Scenario> sweep(int requests, double... ratios) {
+        List<Scenario> out = new java.util.ArrayList<>();
+        for (double ratio : ratios) {
+            int stock = Math.max(3, (int) Math.ceil(requests * 2.5 * ratio));
+            String label = ratio == Math.rint(ratio) ? String.valueOf((long) ratio) : String.valueOf(ratio);
+            out.add(new Scenario("seat-stock-x" + label, Kind.SEATED, stock, requests, 2, 3));
+            out.add(new Scenario("ga-stock-x" + label, Kind.GENERAL_ADMISSION, stock, requests, 1, 4));
+        }
+        return out;
+    }
+
     public Scenario scaled(int factor) {
         if (factor <= 1) {
             return this;
