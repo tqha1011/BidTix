@@ -24,26 +24,30 @@ seat-hold or payment flow).
 ## Tech stack
 
 - Java 21, Spring Boot 4.1.2 (webmvc, data-jpa, security, oauth2-resource-server, actuator)
-- PostgreSQL (source of truth), Flyway (migrations); Redis (cache / fast-path gate / rate limit) is planned
+- PostgreSQL (source of truth), Flyway (migrations); Redis is used as a cache (Spring Cache, `RedisCacheManager`,
+  config in `CacheConfig` and `spring.cache.redis.*`); a fast-path gate and rate limiting are planned
 - Self-issued JWT (access + rotating refresh token); the app verifies its own tokens as a resource server
 - Payment: `PaymentGateway` interface with a `MockPaymentGateway` that always succeeds (synchronous);
   the real provider with asynchronous webhook callbacks is planned
 - Lombok, springdoc-openapi (Swagger UI); the Micrometer Prometheus registry is on the classpath but its
   endpoint is not exposed yet
 - Tests: JUnit 5, Mockito, MockMvc, Spring Security test, Testcontainers (real Postgres; Docker is
-  required to run the integration tests). A Redis container will be added with Redis.
+  required to run the integration tests; `PostgresIntegrationTest` also starts a Redis container).
 
-> Status: schema (Flyway V1–V13), JPA entities, the `auth` module, global error handling, Testcontainers
+> Status: schema (Flyway V1–V14), JPA entities, the `auth` module, global error handling, Testcontainers
 > and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats, mock payment, issue
 > tickets) are done, and so is the flow for **GENERAL_ADMISSION zones** (counter decrement). The booking
 > flow is service-only: there is no controller or endpoint for it yet.
 > Role-protected management endpoints exist (`@PreAuthorize`, roles come from the JWT `roles` claim):
-> `POST /venues` (ADMIN), `POST /events` and `POST /events/{id}/zones` (ORGANIZER; the zone call creates a
-> SEATED zone's seats in bulk), `GET /admin/events/{id}/tickets` (ADMIN). Only CUSTOMERs can register, so
-> ADMIN/ORGANIZER users must be inserted by SQL for now.
-> Not started: event publish/browse API, hold-expiry sweeper, auction, real payment provider and webhooks, idempotency
-> filter. Redis is planned but not yet in `pom.xml` / `compose.yaml`; add it before writing code that
-> depends on it.
+> `POST /venues` (ADMIN), `POST /events`, `POST /events/{id}/zones` (ORGANIZER; the zone call creates a
+> SEATED zone's seats in bulk) and `POST /events/{id}/publish` (ORGANIZER, owner only, DRAFT to PUBLISHED, needs a
+> zone), `GET /admin/events/{id}/tickets` (ADMIN). Any logged-in user can read `GET /venues/{publicId}` and
+> `GET /events?page=&size=` (published events that have not started, soonest first); both are cached in Redis with
+> a short TTL, and publishing evicts the event pages. Only CUSTOMERs can register, so ADMIN/ORGANIZER users must be
+> inserted by SQL for now.
+> Not started: event cancel and update, hold-expiry sweeper, auction, real payment provider and webhooks,
+> idempotency filter. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
+> `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
 
 **Entity mapping conventions**
 - `BaseEntity` (id + `created_at`) / `AuditableEntity` (+ `updated_at`) in `common/domain`.

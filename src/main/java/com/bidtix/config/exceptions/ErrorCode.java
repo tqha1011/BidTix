@@ -42,7 +42,8 @@ public enum ErrorCode {
     // --- event ---
     VENUE_NOTFOUND(HttpStatus.NOT_FOUND, "Venue not found"),
     ZONE_NAME_TAKEN(HttpStatus.CONFLICT, "A zone with this name already exists for the event"),
-    EVENT_NOT_EDITABLE(HttpStatus.CONFLICT, "Only a DRAFT event can be changed");
+    EVENT_NOT_EDITABLE(HttpStatus.CONFLICT, "Only a DRAFT event can be changed"),
+    EVENT_HAS_NO_ZONES(HttpStatus.CONFLICT, "An event needs at least one zone before it can be published");
 
     private final HttpStatus status;
     private final String message;

@@ -31,6 +31,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -130,6 +131,55 @@ class MethodAuthorizationTest {
             mvc.perform(json(post("/api/v1/events/" + UUID.randomUUID() + "/zones"), role, ZONE_BODY))
                     .andExpect(forbidden());
         }
+    }
+
+    // ---- POST /events/{id}/publish: ORGANIZER only --------------------------------------------
+
+    @Test
+    void publishEvent_organizer_isAllowed_andServiceGetsTheTokenSubject() throws Exception {
+        UUID eventId = UUID.randomUUID();
+
+        mvc.perform(post("/api/v1/events/" + eventId + "/publish").header(HttpHeaders.AUTHORIZATION, "Bearer ORGANIZER"))
+                .andExpect(status().isOk());
+
+        verify(eventService).publish(eq(USER_ID), eq(eventId));
+    }
+
+    @Test
+    void publishEvent_adminAndCustomer_areForbidden() throws Exception {
+        for (String role : List.of("ADMIN", "CUSTOMER")) {
+            mvc.perform(post("/api/v1/events/" + UUID.randomUUID() + "/publish")
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + role))
+                    .andExpect(forbidden());
+        }
+    }
+
+    // ---- GET /events and GET /venues/{id}: any logged-in user ---------------------------------
+
+    @Test
+    void listEvents_anyRole_isAllowed_withDefaultPaging() throws Exception {
+        for (String role : List.of("ADMIN", "ORGANIZER", "CUSTOMER")) {
+            mvc.perform(get("/api/v1/events").header(HttpHeaders.AUTHORIZATION, "Bearer " + role))
+                    .andExpect(status().isOk());
+        }
+
+        verify(eventService, atLeastOnce()).listPublished(0, 20);
+    }
+
+    @Test
+    void listEvents_withoutToken_is401() throws Exception {
+        mvc.perform(get("/api/v1/events"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    void getVenue_anyRole_isAllowed_andWithoutTokenIs401() throws Exception {
+        for (String role : List.of("ADMIN", "ORGANIZER", "CUSTOMER")) {
+            mvc.perform(get("/api/v1/venues/" + UUID.randomUUID()).header(HttpHeaders.AUTHORIZATION, "Bearer " + role))
+                    .andExpect(status().isOk());
+        }
+        mvc.perform(get("/api/v1/venues/" + UUID.randomUUID())).andExpect(status().isUnauthorized());
     }
 
     // ---- GET /admin/events/{id}/tickets: ADMIN only ------------------------------------------

@@ -12,6 +12,8 @@ import java.util.UUID;
 public interface TicketZoneRepository extends JpaRepository<TicketZone, Long> {
     Optional<TicketZone> findByPublicId(UUID publicId);
 
+    boolean existsByEventId(Long eventId);
+
     /**
      * Takes {@code quantity} tickets from a general-admission zone, but only if that many are left. The
      * condition and the subtraction are one statement, so two buyers can never both take the last ones.
