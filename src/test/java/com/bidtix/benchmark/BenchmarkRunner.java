@@ -15,10 +15,17 @@ public final class BenchmarkRunner {
 
     private final StrategyContext ctx;
     private final BenchmarkFixture fixture;
+    private final boolean virtualThreads;
 
     public BenchmarkRunner(StrategyContext ctx) {
+        this(ctx, false);
+    }
+
+    /** @param virtualThreads run the simulated users on virtual threads instead of platform threads */
+    public BenchmarkRunner(StrategyContext ctx, boolean virtualThreads) {
         this.ctx = ctx;
         this.fixture = new BenchmarkFixture(ctx.em(), ctx.tx());
+        this.virtualThreads = virtualThreads;
     }
 
     /** True unless the strategy throws UnsupportedOperationException for this kind of inventory. */
@@ -73,7 +80,7 @@ public final class BenchmarkRunner {
             jobs.add(() -> strategy.holdSeats(request));
         }
         strategy.beforeRun(new RunInfo(Kind.SEATED, data.zoneId(), sc.inventory(), data.seatIds()));
-        LoadRunner.Run run = LoadRunner.run(jobs, threads);
+        LoadRunner.Run run = LoadRunner.run(jobs, threads, virtualThreads);
 
         List<Claim> winners = new ArrayList<>();
         for (int i = 0; i < run.samples().size(); i++) {
@@ -95,7 +102,7 @@ public final class BenchmarkRunner {
             jobs.add(() -> strategy.takeQuantity(request));
         }
         strategy.beforeRun(new RunInfo(Kind.GENERAL_ADMISSION, data.zoneId(), sc.inventory(), List.of()));
-        LoadRunner.Run run = LoadRunner.run(jobs, threads);
+        LoadRunner.Run run = LoadRunner.run(jobs, threads, virtualThreads);
 
         long promised = 0;
         for (int i = 0; i < run.samples().size(); i++) {
