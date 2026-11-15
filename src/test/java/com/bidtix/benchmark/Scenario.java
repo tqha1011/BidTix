@@ -14,6 +14,20 @@ import java.util.List;
  */
 public record Scenario(String name, Kind kind, int inventory, int requests, int minPerRequest, int maxPerRequest) {
 
+    /**
+     * The same shape with {@code factor} times the requests, so a run with many threads still has enough work to
+     * keep them all busy. The inventory grows by the same factor to keep the ratio of stock to requests, except
+     * for a single seat ({@code seat-hot}): its whole point is that everybody fights for ONE seat.
+     */
+    public Scenario scaled(int factor) {
+        if (factor <= 1) {
+            return this;
+        }
+        boolean singleSeat = kind == Kind.SEATED && inventory == 1;
+        return new Scenario(name, kind, singleSeat ? inventory : inventory * factor, requests * factor,
+                minPerRequest, maxPerRequest);
+    }
+
     public static final List<Scenario> ALL = List.of(
             // one row, everybody wants it: the most contention a single seat can see
             new Scenario("seat-hot", Kind.SEATED, 1, 200, 1, 1),

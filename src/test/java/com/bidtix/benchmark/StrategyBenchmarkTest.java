@@ -7,13 +7,15 @@ import org.junit.jupiter.api.Test;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * The benchmark: every strategy x scenario x thread count, printed as a markdown table and written to
- * {@code target/benchmark/results.md}. Slow, so it is tagged and only runs with {@code make bench}.
+ * {@code target/benchmark/results-platform.md} (or {@code results-virtual.md} with {@code VIRTUAL=true}). Slow, so it
+ * is tagged and only runs with {@code make bench}.
  * <ul>
  *   <li>{@code make bench ONLY=optimistic}: only strategies whose name contains the text</li>
  *   <li>{@code make bench RUNS=3}: measured runs per cell (default 5, plus one discarded warm-up run)</li>
@@ -25,15 +27,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Tag("benchmark")
 class StrategyBenchmarkTest extends BenchmarkTestBase {
 
-    private static final int[] THREADS = {8, 32, 64};
-
     @Test
     void compareStrategies() throws Exception {
         String only = System.getProperty("bench.only", "");
         int runs = Integer.getInteger("bench.runs", 5);
+        int[] threadCounts = Arrays.stream(System.getProperty("bench.threads", "8,32,64").split(","))
+                .map(String::trim).mapToInt(Integer::parseInt).toArray();
+        int scale = Integer.getInteger("bench.scale", 1);
+        boolean virtual = Boolean.getBoolean("bench.virtual");
 
         StrategyContext ctx = ctx();
-        BenchmarkRunner runner = new BenchmarkRunner(ctx);
+        BenchmarkRunner runner = new BenchmarkRunner(ctx, virtual);
         List<RunStats> rows = new ArrayList<>();
         List<String> notImplemented = new ArrayList<>();
         List<String> failures = new ArrayList<>();
@@ -51,8 +55,8 @@ class StrategyBenchmarkTest extends BenchmarkTestBase {
                     if (scenario.kind() != kind) {
                         continue;
                     }
-                    for (int threads : THREADS) {
-                        RunStats cell = runner.measure(strategy, scenario, threads, runs);
+                    for (int threads : threadCounts) {
+                        RunStats cell = runner.measure(strategy, scenario.scaled(scale), threads, runs);
                         rows.add(cell);
                         if (!strategy.unsafeByDesign() && (cell.oversold() > 0 || cell.leaked() > 0)) {
                             failures.add(strategy.name() + " / " + scenario.name() + " / " + threads + " threads: oversold="
@@ -63,18 +67,21 @@ class StrategyBenchmarkTest extends BenchmarkTestBase {
             }
         }
 
-        String report = Report.markdown(rows, notImplemented, environment(runs));
+        String report = Report.markdown(rows, notImplemented, environment(runs, scale, virtual));
         System.out.println(report);
-        Path out = Path.of("target", "benchmark", "results.md");
+        // one file per thread type, so running both does not overwrite the first result
+        Path out = Path.of("target", "benchmark", virtual ? "results-virtual.md" : "results-platform.md");
         Files.createDirectories(out.getParent());
         Files.writeString(out, report);
 
         assertThat(failures).as("strategies that must never oversell").isEmpty();
     }
 
-    private String environment(int runs) {
+    private String environment(int runs, int scale, boolean virtual) {
         String postgres = jdbc.queryForObject("select version()", String.class);
         return "- PostgreSQL: " + postgres.split(",")[0] + " (Testcontainers)\n"
+                + "- Simulated users run on: " + (virtual ? "virtual threads" : "platform threads")
+                + "; requests and inventory x" + scale + " (seat-hot keeps 1 seat)\n"
                 + "- Connection pool: " + POOL_SIZE + ", cores: " + Runtime.getRuntime().availableProcessors()
                 + ", JVM: " + System.getProperty("java.version") + "\n"
                 + "- Per cell: 1 warm-up run (discarded) + " + runs + " measured runs; throughput and latency are the "

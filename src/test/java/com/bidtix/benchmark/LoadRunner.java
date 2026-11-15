@@ -34,6 +34,14 @@ public final class LoadRunner {
      * the run so the caller can skip the strategy. Any other exception becomes {@link HoldResult#error()}.
      */
     public static Run run(List<Callable<HoldResult>> jobs, int threads) throws Exception {
+        return run(jobs, threads, false);
+    }
+
+    /**
+     * Same as {@link #run(List, int)}; with {@code virtual} the {@code threads} simulated users run on Java 21
+     * virtual threads instead of platform threads. The jobs and the strategies are identical in both modes.
+     */
+    public static Run run(List<Callable<HoldResult>> jobs, int threads, boolean virtual) throws Exception {
         Sample[] samples = new Sample[jobs.size()];
         Map<String, AtomicInteger> errors = new ConcurrentHashMap<>();
         AtomicInteger next = new AtomicInteger();
@@ -41,7 +49,9 @@ public final class LoadRunner {
         CountDownLatch ready = new CountDownLatch(threads);
         CountDownLatch go = new CountDownLatch(1);
 
-        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        ExecutorService pool = virtual
+                ? Executors.newVirtualThreadPerTaskExecutor()
+                : Executors.newFixedThreadPool(threads);
         try {
             List<Future<?>> workers = new ArrayList<>();
             for (int t = 0; t < threads; t++) {

@@ -1,11 +1,11 @@
 package com.bidtix.benchmark.strategies;
 
-import com.bidtix.benchmark.HoldResult;
-import com.bidtix.benchmark.HoldStrategy;
-import com.bidtix.benchmark.QuantityRequest;
-import com.bidtix.benchmark.RunInfo;
-import com.bidtix.benchmark.SeatHoldRequest;
-import com.bidtix.benchmark.StrategyContext;
+import com.bidtix.benchmark.*;
+import io.lettuce.core.ScriptOutputType;
+import io.lettuce.core.api.sync.RedisCommands;
+
+import java.time.Duration;
+import java.util.List;
 
 /**
  * Redis as a GATE, PostgreSQL as the truth (decided for this project, see CLAUDE.md): a Lua script decides
@@ -34,6 +34,48 @@ public class RedisLuaGateStrategy implements HoldStrategy {
 
     private final StrategyContext ctx;
 
+    /** KEYS[1] = zone key, ARGV[1] = quantity. 1 = taken, 0 = not enough. */
+    private static final String GA_GATE = """
+        local cur = tonumber(redis.call('GET', KEYS[1]))
+        if cur ~= nil and cur >= tonumber(ARGV[1]) then
+            redis.call('DECRBY', KEYS[1], ARGV[1])
+            return 1
+        else
+            return 0
+        end;
+    """;
+
+    /** KEYS[1] = zone key, ARGV[1] = quantity. Gives the quantity back after the database said no. */
+    private static final String GA_RELEASE = """
+        if redis.call('EXISTS', KEYS[1]) == 1 then
+            redis.call('INCRBY', KEYS[1], ARGV[1])
+        end
+        return 1
+    """;
+
+    /** KEYS = seat keys (sorted), ARGV[1] = orderId, ARGV[2] = ttl in ms. All or nothing. */
+    private static final String SEAT_GATE = """
+        for i = 1, #KEYS do
+            if redis.call('EXISTS', KEYS[i]) == 1 then
+                return 0
+            end
+        end
+        for i = 1, #KEYS do
+            redis.call('SET', KEYS[i], ARGV[1], 'PX', ARGV[2])
+        end
+        return 1
+    """;
+
+    /** KEYS = seat keys, ARGV[1] = orderId. Deletes only the keys that are still ours. */
+    private static final String SEAT_RELEASE = """
+        for i = 1, #KEYS do
+            if redis.call('GET', KEYS[i]) == ARGV[1] then
+                redis.call('DEL', KEYS[i])
+            end
+        end
+        return 1
+    """;
+
     public RedisLuaGateStrategy(StrategyContext ctx) {
         this.ctx = ctx;
     }
@@ -45,16 +87,68 @@ public class RedisLuaGateStrategy implements HoldStrategy {
 
     @Override
     public void beforeRun(RunInfo info) {
-        throw new UnsupportedOperationException("TODO(you): warm Redis from the database");
+        ctx.redis().flushAll();
+
+        if(info.kind() == RunInfo.Kind.GENERAL_ADMISSION) {
+            ctx.redis().commands().set(RedisSupport.zoneKey(info.zoneId()), String.valueOf(info.capacity()));
+        }
     }
 
     @Override
     public HoldResult holdSeats(SeatHoldRequest request) {
-        throw new UnsupportedOperationException("TODO(you): Redis gate + conditional UPDATE for seats");
+        RedisCommands<String, String> redis = ctx.redis().commands();
+        // ascending ids: the database then locks overlapping requests in the same order, so no deadlock
+        List<Long> sorted = request.seatIds().stream().sorted().toList();
+        String[] keys = sorted.stream().map(RedisSupport::seatKey).toArray(String[]::new);
+        String orderId = String.valueOf(request.orderId());
+        // PX wants a duration (ms from now), not a point in time
+        long ttlMs = Math.max(1, Duration.between(ctx.clock().instant(), request.expiresAt()).toMillis());
+
+        Long gate = redis.eval(SEAT_GATE, ScriptOutputType.INTEGER, keys, orderId, String.valueOf(ttlMs));
+        if (gate == null || gate == 0L) {
+            return HoldResult.soldOut();   // gate says no: PostgreSQL is not touched
+        }
+
+        HoldResult result = null;
+        try {
+            result = ctx.tx().execute(status -> {
+                int held = ctx.seats().updateSeatHoldBySeatIds(sorted, request.orderId(), request.expiresAt());
+                if (held == sorted.size()) {
+                    return HoldResult.held();
+                }
+                status.setRollbackOnly();   // all or nothing
+                return HoldResult.soldOut();
+            });
+            return result;
+        } finally {
+            // Not held, or the database threw: the keys must not keep blocking these seats.
+            if (result == null || result.outcome() != HoldResult.Outcome.HELD) {
+                redis.eval(SEAT_RELEASE, ScriptOutputType.INTEGER, keys, orderId);
+            }
+        }
     }
 
     @Override
     public HoldResult takeQuantity(QuantityRequest request) {
-        throw new UnsupportedOperationException("TODO(you): Redis gate + conditional UPDATE for quantity");
+        RedisCommands<String, String> redis = ctx.redis().commands();
+        String[] keys = {RedisSupport.zoneKey(request.zoneId())};
+        String quantity = String.valueOf(request.quantity());
+
+        Long gate = redis.eval(GA_GATE, ScriptOutputType.INTEGER, keys, quantity);
+        if (gate == null || gate == 0L) {
+            return HoldResult.soldOut();   // gate says no: PostgreSQL is not touched
+        }
+
+        boolean held = false;
+        try {
+            Integer rows = ctx.tx().execute(status -> ctx.zones().takeQuantity(request.zoneId(), request.quantity()));
+            held = rows != null && rows == 1;
+            return held ? HoldResult.held() : HoldResult.soldOut();
+        } finally {
+            // The database said no, or threw: give the quantity back to the gate.
+            if (!held) {
+                redis.eval(GA_RELEASE, ScriptOutputType.INTEGER, keys, quantity);
+            }
+        }
     }
 }

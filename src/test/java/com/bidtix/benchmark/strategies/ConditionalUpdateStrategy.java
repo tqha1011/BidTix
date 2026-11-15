@@ -6,20 +6,12 @@ import com.bidtix.benchmark.QuantityRequest;
 import com.bidtix.benchmark.SeatHoldRequest;
 import com.bidtix.benchmark.StrategyContext;
 
+import java.util.List;
+
 /**
  * What the application does today (ADR-0001 for seats, ADR-0003 for standing): one UPDATE that checks and
- * changes in the same statement, then look at the row count.
- *
- * <p><b>TODO(you)</b>
- * <ul>
- *   <li>Seats: {@code ctx.seats().updateSeatHoldBySeatIds(sortedIds, orderId, expiresAt)} already exists. Sort the
- *       ids ascending first (overlapping requests lock rows in the same order, so no deadlock). Row count equal
- *       to the number of seats = HELD; anything else = SOLD_OUT and the transaction must roll back, otherwise
- *       the seats it did get stay held (use {@code ctx.tx()} and {@code setRollbackOnly()}).</li>
- *   <li>GA: {@code ctx.zones().takeQuantity(zoneId, quantity)} already exists; 1 row = HELD, 0 = SOLD_OUT.</li>
- *   <li>The existing repository methods are annotated {@code @Modifying} and need a transaction: wrap the
- *       call in {@code ctx.tx().execute(...)}.</li>
- * </ul>
+ * changes in the same statement, then look at the row count. There is no gap between "is it free?" and "take
+ * it", so there is nothing to race on, and no lock is held while application code runs.
  */
 public class ConditionalUpdateStrategy implements HoldStrategy {
 
@@ -36,11 +28,26 @@ public class ConditionalUpdateStrategy implements HoldStrategy {
 
     @Override
     public HoldResult holdSeats(SeatHoldRequest request) {
-        throw new UnsupportedOperationException("TODO(you): conditional UPDATE seat hold");
+        // ascending ids: overlapping requests then lock rows in the same order, so they cannot deadlock
+        List<Long> sorted = request.seatIds().stream().sorted().toList();
+
+        return ctx.tx().execute(status -> {
+            // UPDATE seats SET status='HELD', ... WHERE id IN (...) AND status='AVAILABLE' AND held_by_order_id IS NULL
+            int held = ctx.seats().updateSeatHoldBySeatIds(sorted, request.orderId(), request.expiresAt());
+            if (held == sorted.size()) {
+                return HoldResult.held();
+            }
+            // Some seat was already taken. The seats this statement DID get are still marked in this
+            // transaction, so roll back: a multi-seat request is all or nothing.
+            status.setRollbackOnly();
+            return HoldResult.soldOut();
+        });
     }
 
     @Override
     public HoldResult takeQuantity(QuantityRequest request) {
-        throw new UnsupportedOperationException("TODO(you): conditional UPDATE quantity take");
+        // UPDATE ticket_zones SET available_quantity = available_quantity - :q WHERE id = :z AND available_quantity >= :q
+        int rows = ctx.tx().execute(status -> ctx.zones().takeQuantity(request.zoneId(), request.quantity()));
+        return rows == 1 ? HoldResult.held() : HoldResult.soldOut();
     }
 }
