@@ -101,9 +101,12 @@ public class EventService {
      * <p>Cached per (page, size), see {@link #pageKey}. The key uses the corrected values on purpose: otherwise
      * {@code size=1000} and {@code size=100} would be two entries for the same data, and any caller could fill
      * Redis by walking through page numbers. The cache is a hint for reads only; entries live for the TTL in
-     * application.yaml and are cleared when an event is published.
+     * application.yaml and are cleared when an event is published. {@code sync = true} (with the locking cache writer in
+     * {@code CacheConfig}) lets one request load an empty page while the others wait for it, instead of all of them
+     * querying PostgreSQL at once.
      */
-    @Cacheable(cacheNames = CacheConfig.EVENTS, key = "T(com.bidtix.event.service.EventService).pageKey(#page, #size)")
+    @Cacheable(cacheNames = CacheConfig.EVENTS, sync = true,
+            key = "T(com.bidtix.event.service.EventService).pageKey(#page, #size)")
     @Transactional(readOnly = true)
     public PageResponse<EventResponse> listPublished(int page, int size) {
         // id is the tie-breaker, so two events that start at the same time never swap between pages
