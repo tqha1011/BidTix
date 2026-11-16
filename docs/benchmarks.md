@@ -333,7 +333,7 @@ not the thread type. The virtual-thread comparison was not repeated with the lon
 ### Choice
 
 For the booking flow the choice is `conditional-update` with a Redis flag in front that can only refuse (measured on
-the real flow in the next section). The ADR is still to be written. What the numbers above support:
+the real flow in the next section). Decision and trade-offs: [ADR-0004](ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md). What the numbers above support:
 
 - `naive` is not acceptable, and optimistic locking should not be used for the standing-ticket counter (slow, and it
   refuses customers while tickets remain).

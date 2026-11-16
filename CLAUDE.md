@@ -95,7 +95,7 @@ token cannot both win (conditional `UPDATE ... WHERE revoked_at IS NULL`).
 **Booking flow** (`BookingService.bookTicket`, SEATED and GENERAL_ADMISSION zones, no HTTP endpoint yet).
 Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) (seats),
 [ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md) (payment boundary) and
-[ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). At most
+[ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). The Redis refusal gate in front of it: [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md). At most
 `bidtix.booking.max-tickets-per-order` (5) tickets per order, and the zone must belong to the event. The
 method is deliberately **not** `@Transactional`; it runs three steps with `TransactionTemplate`, and returns a
 `BookingTicketSeatsResult` or a `BookingTicketQuantityResult` (both are a `BaseBookingTicketResult`):
