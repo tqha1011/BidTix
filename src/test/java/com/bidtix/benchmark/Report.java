@@ -40,12 +40,15 @@ public final class Report {
         StringBuilder out = new StringBuilder("# Anti-overselling benchmark\n\n");
         out.append(environment).append("\n\n");
         out.append("| strategy | scenario | threads | requests | held | sold out | gave up | errors | retries "
-                + "| **oversold** | leaked | ops/s | p50 ms | p95 ms | p99 ms |\n");
-        out.append("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|\n");
+                + "| **oversold** | leaked | ops/s | p50 ms | p95 ms | p99 ms | run s |\n");
+        out.append("|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|\n");
         for (RunStats r : rows) {
-            out.append(String.format("| %s | %s | %d | %d | %d | %d | %d | %d | %d | **%d** | %d | %.0f | %.2f | %.2f | %.2f |%n",
+            // "run s" = how long the load lasted (requests / throughput). Under about a second, start-up effects
+            // (thread start, JIT, connection pool) are a large part of the measurement.
+            out.append(String.format("| %s | %s | %d | %d | %d | %d | %d | %d | %d | **%d** | %d | %.0f | %.2f | %.2f | %.2f | %.2f |%n",
                     r.strategy(), r.scenario(), r.threads(), r.requests(), r.held(), r.soldOut(), r.gaveUp(),
-                    r.errors(), r.retries(), r.oversold(), r.leaked(), r.opsPerSec(), r.p50Ms(), r.p95Ms(), r.p99Ms()));
+                    r.errors(), r.retries(), r.oversold(), r.leaked(), r.opsPerSec(), r.p50Ms(), r.p95Ms(), r.p99Ms(),
+                    r.requests() / r.opsPerSec()));
         }
         List<String> errorLines = new ArrayList<>();
         for (RunStats r : rows) {

@@ -1,4 +1,4 @@
-package com.bidtix.booking.dto;
+package com.bidtix.booking.dtos;
 
 import java.util.List;
 import java.util.UUID;

@@ -79,11 +79,10 @@ public final class InvariantChecker {
 
     public static Map<Long, Long> readHolders(JdbcTemplate jdbc, long zoneId) {
         Map<Long, Long> holders = new HashMap<>();
-        jdbc.query("select id, held_by_order_id from seats where zone_id = ?", rs -> {
-            long seatId = rs.getLong(1);
-            long holder = rs.getLong(2);
-            boolean free = rs.wasNull();   // must come right after reading the nullable column
-            holders.put(seatId, free ? null : holder);
+        // Only held seats: a seat that is missing from the map is free, which checkSeats treats like a null holder.
+        // Reading every seat of a zone with hundreds of thousands of free seats would cost more than the run.
+        jdbc.query("select id, held_by_order_id from seats where zone_id = ? and held_by_order_id is not null", rs -> {
+            holders.put(rs.getLong(1), rs.getLong(2));
         }, zoneId);
         return holders;
     }

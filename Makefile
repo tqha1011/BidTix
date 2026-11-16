@@ -4,7 +4,7 @@
 MVN := ./mvnw
 
 .DEFAULT_GOAL := help
-.PHONY: help keys run run-local run-seed test bench test-one build clean db-up db-down psql
+.PHONY: help keys run run-local run-seed test bench bench-gate test-one build clean db-up db-down psql
 
 help: ## Show this list
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -39,11 +39,19 @@ test-one: ## Run one test: make test-one T=AuthServiceTest  (or T=AuthServiceTes
 	@test -n "$(T)" || { echo "usage: make test-one T=ClassName[#method]"; exit 1; }
 	$(MVN) test -Dtest='$(T)'
 
-bench: ## Run the anti-overselling benchmark (slow, Docker): make bench [ONLY=optimistic] [RUNS=3] [THREADS=500] [SCALE=5] [VIRTUAL=true]
+bench: ## Run the anti-overselling benchmark (slow, Docker): make bench [ONLY=optimistic] [RUNS=3] [THREADS=500] [SCALE=5] [VIRTUAL=true] [RATIOS=0.1,1,10 [REQUESTS=20000]]
 	$(MVN) test -Dgroups=benchmark -Dbenchmark.excludedGroups=none -Dtest='StrategyBenchmarkTest,RedisGateCrashTest' \
 		$(if $(ONLY),-Dbench.only=$(ONLY)) $(if $(RUNS),-Dbench.runs=$(RUNS)) \
 		$(if $(THREADS),-Dbench.threads=$(THREADS)) $(if $(SCALE),-Dbench.scale=$(SCALE)) \
-		$(if $(VIRTUAL),-Dbench.virtual=$(VIRTUAL))
+		$(if $(VIRTUAL),-Dbench.virtual=$(VIRTUAL)) \
+		$(if $(RATIOS),-Dbench.ratios=$(RATIOS)) $(if $(REQUESTS),-Dbench.requests=$(REQUESTS))
+
+bench-gate: ## Benchmark the booking gate on the real booking flow, gate on then off: make bench-gate [RUNS=3] [THREADS=500] [SCALE=1]
+	for g in true false; do \
+		$(MVN) test -Dgroups=benchmark -Dbenchmark.excludedGroups=none -Dtest=BookingGateBenchmarkTest \
+			-Dbidtix.booking.gate-enabled=$$g $(if $(RUNS),-Dbench.runs=$(RUNS)) \
+			$(if $(THREADS),-Dbench.threads=$(THREADS)) $(if $(SCALE),-Dbench.scale=$(SCALE)) || exit 1; \
+	done
 
 build: ## Build the jar without running tests
 	$(MVN) clean package -DskipTests

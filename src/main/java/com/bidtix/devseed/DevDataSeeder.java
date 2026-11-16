@@ -1,6 +1,6 @@
 package com.bidtix.devseed;
 
-import com.bidtix.booking.dto.BookingTicketRequest;
+import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.service.BookingService;
 import com.bidtix.event.dtos.CreateEventRequest;
 import com.bidtix.event.dtos.CreateVenueRequest;

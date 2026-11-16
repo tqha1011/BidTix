@@ -26,6 +26,8 @@ public enum ErrorCode {
     CONFLICT(HttpStatus.CONFLICT, "The request conflicts with the current state"),
     CONCURRENT_UPDATE(HttpStatus.CONFLICT, "The data was changed by someone else, please retry"),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side"),
+    TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, "Too many requests, please try again later"),
+    RATE_LIMITER_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "The service is temporarily unavailable, please try again later"),
 
     // --- user / auth ---
     EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "Email is already registered"),
@@ -42,7 +44,8 @@ public enum ErrorCode {
     // --- event ---
     VENUE_NOTFOUND(HttpStatus.NOT_FOUND, "Venue not found"),
     ZONE_NAME_TAKEN(HttpStatus.CONFLICT, "A zone with this name already exists for the event"),
-    EVENT_NOT_EDITABLE(HttpStatus.CONFLICT, "Only a DRAFT event can be changed");
+    EVENT_NOT_EDITABLE(HttpStatus.CONFLICT, "Only a DRAFT event can be changed"),
+    EVENT_HAS_NO_ZONES(HttpStatus.CONFLICT, "An event needs at least one zone before it can be published");
 
     private final HttpStatus status;
     private final String message;

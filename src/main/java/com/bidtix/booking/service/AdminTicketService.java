@@ -31,7 +31,7 @@ public class AdminTicketService {
                                                           int page, int size) {
         long eventId = eventService.getEventIdByPublicId(eventPublicId);
         var statuses = status == null ? EnumSet.allOf(TicketStatus.class) : EnumSet.of(status);
-        var pageable = PageRequest.of(Math.max(page, 0), Math.min(Math.max(size, 1), MAX_PAGE_SIZE));
+        var pageable = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE));
         return PageResponse.from(ticketRepository.findAdminViewByEvent(eventId, statuses, pageable));
     }
 }

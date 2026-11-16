@@ -23,6 +23,7 @@ Version numbers are global across modules, so a new migration always takes the n
 | V11 | `booking` | `orders.order_code` (existing orders are backfilled as `ORDER_` + zero-padded id) |
 | V12 | `event` | `seats.public_id` |
 | V13 | `event` | `venues.public_id` |
+| V14 | `event` | index `idx_events_status_starts_at (status, starts_at)` for the public event list |
 
 ## Conventions
 
@@ -127,5 +128,5 @@ These enforce correctness, not performance:
 Add these once queries exist and are measured with `EXPLAIN`:
 - `orders(status, expires_at)` for the sweeper, `orders(user_id, created_at DESC)` for history
 - `auctions(status, ends_at)` for the closing job, `bids(auction_id, amount DESC)` for top bids
-- `events(status, starts_at)` for listing, `seats(zone_id, status)` for the seat map
+- `seats(zone_id, status)` for the seat map (`events(status, starts_at)` for listing was added in V14)
 - `idempotency_keys(expires_at)` and `refresh_tokens(expires_at)` for cleanup

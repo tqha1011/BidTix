@@ -35,6 +35,14 @@ class StrategyBenchmarkTest extends BenchmarkTestBase {
                 .map(String::trim).mapToInt(Integer::parseInt).toArray();
         int scale = Integer.getInteger("bench.scale", 1);
         boolean virtual = Boolean.getBoolean("bench.virtual");
+        // -Dbench.ratios=0.1,0.5,1,2,10 runs the stock sweep (stock / demand) instead of the four fixed scenarios
+        String ratioProperty = System.getProperty("bench.ratios", "");
+        boolean sweep = !ratioProperty.isBlank();
+        int sweepRequests = Integer.getInteger("bench.requests", 20_000);
+        List<Scenario> scenarios = sweep
+                ? Scenario.sweep(sweepRequests, Arrays.stream(ratioProperty.split(","))
+                        .map(String::trim).mapToDouble(Double::parseDouble).toArray())
+                : Scenario.ALL.stream().map(s -> s.scaled(scale)).toList();
 
         StrategyContext ctx = ctx();
         BenchmarkRunner runner = new BenchmarkRunner(ctx, virtual);
@@ -51,12 +59,12 @@ class StrategyBenchmarkTest extends BenchmarkTestBase {
                     notImplemented.add(strategy.name() + " / " + kind);
                     continue;
                 }
-                for (Scenario scenario : Scenario.ALL) {
+                for (Scenario scenario : scenarios) {
                     if (scenario.kind() != kind) {
                         continue;
                     }
                     for (int threads : threadCounts) {
-                        RunStats cell = runner.measure(strategy, scenario.scaled(scale), threads, runs);
+                        RunStats cell = runner.measure(strategy, scenario, threads, runs);
                         rows.add(cell);
                         if (!strategy.unsafeByDesign() && (cell.oversold() > 0 || cell.leaked() > 0)) {
                             failures.add(strategy.name() + " / " + scenario.name() + " / " + threads + " threads: oversold="
@@ -67,21 +75,25 @@ class StrategyBenchmarkTest extends BenchmarkTestBase {
             }
         }
 
-        String report = Report.markdown(rows, notImplemented, environment(runs, scale, virtual));
+        String shape = sweep
+                ? "stock sweep, stock/demand = " + ratioProperty + ", " + sweepRequests + " requests per cell"
+                : "fixed scenarios, requests and inventory x" + scale + " (seat-hot keeps 1 seat)";
+        String report = Report.markdown(rows, notImplemented, environment(runs, shape, virtual));
         System.out.println(report);
-        // one file per thread type, so running both does not overwrite the first result
-        Path out = Path.of("target", "benchmark", virtual ? "results-virtual.md" : "results-platform.md");
+        // one file per kind of run, so running several does not overwrite the others
+        Path out = Path.of("target", "benchmark",
+                "results-" + (virtual ? "virtual" : "platform") + (sweep ? "-sweep" : "") + ".md");
         Files.createDirectories(out.getParent());
         Files.writeString(out, report);
 
         assertThat(failures).as("strategies that must never oversell").isEmpty();
     }
 
-    private String environment(int runs, int scale, boolean virtual) {
+    private String environment(int runs, String shape, boolean virtual) {
         String postgres = jdbc.queryForObject("select version()", String.class);
         return "- PostgreSQL: " + postgres.split(",")[0] + " (Testcontainers)\n"
                 + "- Simulated users run on: " + (virtual ? "virtual threads" : "platform threads")
-                + "; requests and inventory x" + scale + " (seat-hot keeps 1 seat)\n"
+                + "; " + shape + "\n"
                 + "- Connection pool: " + POOL_SIZE + ", cores: " + Runtime.getRuntime().availableProcessors()
                 + ", JVM: " + System.getProperty("java.version") + "\n"
                 + "- Per cell: 1 warm-up run (discarded) + " + runs + " measured runs; throughput and latency are the "

@@ -15,6 +15,19 @@ spring:
         jwt:
           jws-algorithms:
             - RS256
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      # Spring placeholder default is "${NAME:default}" (one colon); "${NAME:-default}" is bash and would give "-secret".
+      password: ${REDIS_PASSWORD:secret}
+  cache:
+    type: redis
+    redis:
+      time-to-live: 10s
+      use-key-prefix: true
+      key-prefix: "bidtix-backend:"   # quoted: a bare value ending in ":" is a YAML syntax error
+      cache-null-values: false
   flyway:
     enabled: true
     locations: classpath:db/migration
@@ -31,3 +44,18 @@ bidtix:
       # "Secure" cookies are only sent over https. For plain-http local testing set
       # BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false; keep true everywhere else.
       secure: true
+
+  # Rate limit (see config/ratelimit). A policy is one of two algorithms, chosen with `algorithm`:
+  #   fixed-window (default): at most `limit` requests per `window`, counted from the first request.
+  #   token-bucket: a bucket of `capacity` tokens, one per request, `refill-tokens` added every `refill-every`
+  #                 (never above the capacity), so `capacity` is the largest burst and the refill is the steady rate.
+  # Counters live in Redis, so every instance shares them. `fail-open` says what happens when Redis cannot be
+  # reached: true lets the request through, false rejects it (503). Keep it false where a limit protects
+  # against guessing (login, register).
+  rate-limit:
+    enabled: true
+    policies:
+      auth-login:    { limit: 5, window: 1m, fail-open: false }       # per IP
+      auth-register: { limit: 3, window: 1m, fail-open: false }       # per IP
+      # per logged-in user, every other API: a burst of 15, then 3 more requests every 10 s (18 a minute)
+      default-user:  { algorithm: token-bucket, capacity: 15, refill-tokens: 3, refill-every: 10s, fail-open: true }

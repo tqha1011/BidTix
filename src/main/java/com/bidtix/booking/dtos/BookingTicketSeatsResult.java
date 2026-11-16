@@ -1,4 +1,4 @@
-package com.bidtix.booking.dto;
+package com.bidtix.booking.dtos;
 
 import com.bidtix.booking.domain.OrderStatus;
 import com.bidtix.event.domain.ZoneType;
