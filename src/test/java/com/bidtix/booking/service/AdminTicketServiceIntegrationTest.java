@@ -1,7 +1,7 @@
 package com.bidtix.booking.service;
 
 import com.bidtix.booking.domain.TicketStatus;
-import com.bidtix.booking.dto.BookingTicketRequest;
+import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.dtos.AdminTicketResponse;
 import com.bidtix.common.dtos.PageResponse;
 import com.bidtix.config.exceptions.BusinessException;

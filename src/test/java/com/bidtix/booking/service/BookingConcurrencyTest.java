@@ -1,7 +1,7 @@
 package com.bidtix.booking.service;
 
-import com.bidtix.booking.dto.BookingTicketRequest;
-import com.bidtix.booking.dto.BaseBookingTicketResult;
+import com.bidtix.booking.dtos.BookingTicketRequest;
+import com.bidtix.booking.dtos.BaseBookingTicketResult;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.event.domain.Event;

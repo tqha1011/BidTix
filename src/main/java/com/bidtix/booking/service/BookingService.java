@@ -5,12 +5,13 @@ import com.bidtix.booking.domain.OrderItem;
 import com.bidtix.booking.domain.OrderSource;
 import com.bidtix.booking.domain.OrderStatus;
 import com.bidtix.booking.domain.Ticket;
-import com.bidtix.booking.dto.BaseBookingTicketResult;
-import com.bidtix.booking.dto.BookingTicketQuantityResult;
-import com.bidtix.booking.dto.BookingTicketQuantityResult.TicketQuantityInfo;
-import com.bidtix.booking.dto.BookingTicketRequest;
-import com.bidtix.booking.dto.BookingTicketSeatsResult;
-import com.bidtix.booking.dto.BookingTicketSeatsResult.TicketSeatsInfo;
+import com.bidtix.booking.dtos.BaseBookingTicketResult;
+import com.bidtix.booking.dtos.BookingTicketQuantityResult;
+import com.bidtix.booking.dtos.BookingTicketQuantityResult.TicketQuantityInfo;
+import com.bidtix.booking.dtos.BookingTicketRequest;
+import com.bidtix.booking.dtos.BookingTicketSeatsResult;
+import com.bidtix.booking.dtos.BookingTicketSeatsResult.TicketSeatsInfo;
+import com.bidtix.booking.infrastructure.BookingGateway;
 import com.bidtix.booking.infrastructure.BookingProperties;
 import com.bidtix.booking.infrastructure.OrderRepository;
 import com.bidtix.booking.infrastructure.TicketRepository;
@@ -49,6 +50,7 @@ public class BookingService {
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
     private final BookingProperties properties;
+    private final BookingGateway gateway;
 
     /** What the first transaction hands to the payment step and to the second transaction. */
     private record Reservation(Long orderId, BaseBookingTicketResult pending) {
@@ -68,7 +70,15 @@ public class BookingService {
      * result (status PENDING_PAYMENT, no tickets) tells the client so.
      */
     public BaseBookingTicketResult bookTicket(BookingTicketRequest request, UUID userPublicId) {
-        Reservation reservation = inTransaction(() -> reserve(request, userPublicId));
+        rejectIfKnownUnavailable(request);
+
+        Reservation reservation;
+        try {
+            reservation = inTransaction(() -> reserve(request, userPublicId));
+        } catch (BusinessException e) {
+            rememberRejection(request, e);
+            throw e;
+        }
 
         boolean paid = paymentGateway.charge(reservation.pending().orderCode(), reservation.pending().totalAmount());
         if (!paid) {
@@ -78,6 +88,59 @@ public class BookingService {
         // TODO(payment): once a real gateway is used, a failure here means the customer was charged but got
         //  no tickets (e.g. the hold expired meanwhile), so it must trigger a refund.
         return inTransaction(() -> completePayment(reservation));
+    }
+
+    /**
+     * Fast reject before any database work: if a recent request already learned that this quantity or these seats
+     * cannot be had, say so without opening a transaction. This only ever says no. A missing, expired or
+     * unreachable flag lets the request through, and the conditional UPDATE in {@link #reserve} still decides.
+     * A flag can be stale for at most {@code bidtix.booking.gate-ttl-seconds} after stock comes back.
+     */
+    private void rejectIfKnownUnavailable(BookingTicketRequest request) {
+        UUID zone = request.zonePublicId();
+        if (zone == null) {
+            return;
+        }
+        int max = properties.maxTicketsPerOrder();
+        List<UUID> seats = request.seatPublicIds();
+        if (seats != null && !seats.isEmpty()) {
+            if (seats.size() > max) {
+                return;   // invalid request: let validation in reserve() answer it
+            }
+            List<UUID> flagged = gateway.flaggedSeats(zone, seats);
+            if (!flagged.isEmpty()) {
+                throw new BusinessException(ErrorCode.SEAT_UNAVAILABLE,
+                        "Some seats are unavailable", Map.of("seatPublicIds", flagged));
+            }
+        } else {
+            Integer quantity = request.quantity();
+            if (quantity != null && quantity > 0 && quantity <= max && !gateway.mayTakeQuantity(zone, quantity)) {
+                throw new BusinessException(ErrorCode.ZONE_SOLD_OUT, "Not enough tickets left in this zone");
+            }
+        }
+    }
+
+    /** The database said no: tell the gate, so the next requests for the same thing skip the database. */
+    private void rememberRejection(BookingTicketRequest request, BusinessException e) {
+        UUID zone = request.zonePublicId();
+        if (zone == null) {
+            return;
+        }
+        switch (e.getErrorCode()) {
+            case ZONE_SOLD_OUT -> {
+                if (request.quantity() != null) {
+                    gateway.setQuantityRejected(zone, request.quantity());
+                }
+            }
+            case SEAT_UNAVAILABLE -> {
+                if (e.getProperties().get("seatPublicIds") instanceof List<?> ids) {
+                    gateway.setSeatFlagged(zone, ids.stream()
+                            .filter(UUID.class::isInstance).map(UUID.class::cast).toList());
+                }
+            }
+            default -> {
+            }
+        }
     }
 
     private BaseBookingTicketResult completePayment(Reservation reservation) {

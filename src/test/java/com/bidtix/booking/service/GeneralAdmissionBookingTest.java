@@ -2,9 +2,9 @@ package com.bidtix.booking.service;
 
 import com.bidtix.booking.domain.OrderStatus;
 import com.bidtix.booking.domain.TicketStatus;
-import com.bidtix.booking.dto.BaseBookingTicketResult;
-import com.bidtix.booking.dto.BookingTicketQuantityResult;
-import com.bidtix.booking.dto.BookingTicketRequest;
+import com.bidtix.booking.dtos.BaseBookingTicketResult;
+import com.bidtix.booking.dtos.BookingTicketQuantityResult;
+import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.dtos.AdminTicketResponse;
 import com.bidtix.booking.service.GeneralAdmissionFixtures.Fixture;
 import com.bidtix.config.exceptions.BusinessException;
