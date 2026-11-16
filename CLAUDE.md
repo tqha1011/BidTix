@@ -25,7 +25,7 @@ seat-hold or payment flow).
 
 - Java 21, Spring Boot 4.1.2 (webmvc, data-jpa, security, oauth2-resource-server, actuator)
 - PostgreSQL (source of truth), Flyway (migrations); Redis is used as a cache (Spring Cache, `RedisCacheManager`,
-  config in `CacheConfig` and `spring.cache.redis.*`); a fast-path gate and rate limiting are planned
+  config in `CacheConfig` and `spring.cache.redis.*`); the booking fast-reject gate (`BookingGateway`) and rate limiting also use it
 - Self-issued JWT (access + rotating refresh token); the app verifies its own tokens as a resource server
 - Payment: `PaymentGateway` interface with a `MockPaymentGateway` that always succeeds (synchronous);
   the real provider with asynchronous webhook callbacks is planned
@@ -108,6 +108,14 @@ method is deliberately **not** `@Transactional`; it runs three steps with `Trans
    the method returns the `PENDING_PAYMENT` result and the stock stays taken until the order expires.
 3. `completePayment` (transaction): order `PAID`; SEATED seats `HELD -> SOLD` (row count checked); tickets
    issued (one per seat, or one per unit of a GA item). Tickets exist only for paid orders.
+
+**Booking gate** (`booking/infrastructure/BookingGateway`, `bidtix.booking.gate-enabled` / `gate-ttl-seconds`): before step 1,
+`BookingService.rejectIfKnownUnavailable` asks Redis whether a recent request already learned that this quantity (GA) or these
+seats cannot be had, and refuses without opening a transaction. The flags are written only after the database refused
+(`rememberRejection`), live for a few seconds and can only refuse: a missing flag, an expired one or Redis down lets the request
+through (fail-open), and the conditional `UPDATE` still decides. Measured effect: `docs/benchmarks.md`, section "Booking gate on
+the real flow". **Whatever returns stock (the hold-expiry sweeper, giving GA quantity back, a cancel) must clear the matching
+flags after its database commit**, or customers are refused for up to the TTL.
 
 Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`),
 and nothing releases expired seat holds or returns GA quantity yet.

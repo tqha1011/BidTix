@@ -332,7 +332,8 @@ not the thread type. The virtual-thread comparison was not repeated with the lon
 
 ### Choice
 
-Not made yet; record it in a new ADR. What the numbers support:
+For the booking flow the choice is `conditional-update` with a Redis flag in front that can only refuse (measured on
+the real flow in the next section). The ADR is still to be written. What the numbers above support:
 
 - `naive` is not acceptable, and optimistic locking should not be used for the standing-ticket counter (slow, and it
   refuses customers while tickets remain).
@@ -345,3 +346,57 @@ Not made yet; record it in a new ADR. What the numbers support:
   stays short if the process dies between taking stock and giving it back), is the decision for the ADR.
 - If the single counter row turns out to be the limit for a real standing zone with plenty of tickets, splitting the
   counter into several rows is an idea to test; it has not been measured here.
+
+## Booking gate on the real flow
+
+The strategy benchmark above times one SQL statement. This one times `BookingService.bookTicket` itself (validation,
+order insert, stock update, mock payment, ticket issue) on the whole application, PostgreSQL 17.11 and Redis in Docker, and
+compares the booking gate (`BookingGateway`) ON and OFF.
+
+```bash
+make bench-gate                        # gate on, then off; writes target/benchmark/booking-gate-{on,off}.md
+make bench-gate RUNS=5 THREADS=200 SCALE=2
+```
+
+**What the gate is.** A flag in Redis that can only refuse, never grant. When the database refuses a quantity (standing
+zone) or some seats, the flag remembers it for `bidtix.booking.gate-ttl-seconds` (3). The next requests for that quantity
+or those seats are refused before any transaction is opened. No flag, an expired flag or Redis down means the request goes
+to PostgreSQL, whose conditional `UPDATE` still decides. A flag holds the quantity the database refused: that quantity and
+any larger one are refused, smaller ones still go through. Seat flags are keyed by zone and seat.
+
+Run of 2026-11-16: 500 simulated users on platform threads, **connection pool 10** (the application's default), 12 cores,
+JVM 21. Per scenario: 1 warm-up run (discarded) + 3 measured runs on a fresh zone; each row is the run with the median throughput.
+
+| scenario | gate | requests | sold | refused by DB | refused by gate | errors | false rejections | ops/s | p50 ms | p95 ms | p99 ms | run s |
+|---|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ga-soldout-tail (capacity 50, 1-2 tickets each) | off | 5,000 | 33 | 4,967 | 0 | 0 | 0 | 969 | 479.01 | 1503.35 | 1990.09 | 5.16 |
+| ga-soldout-tail | **on** | 5,000 | 33 | 903 | 4,064 | 0 | 0 | **2,301** | 4.64 | 1113.30 | 1188.56 | 2.17 |
+| ga-plentiful (capacity 20,000) | off | 5,000 | 5,000 | 0 | 0 | 0 | 0 | 757 | 637.02 | 1335.69 | 1967.68 | 6.61 |
+| ga-plentiful | on | 5,000 | 5,000 | 0 | 0 | 0 | 0 | 717 | 674.51 | 1126.92 | 1422.19 | 6.97 |
+| seat-hot (1 seat, everybody wants it) | off | 3,000 | 1 | - | - | 0 | 0 | 2,027 | 235.50 | 711.36 | 951.67 | 1.48 |
+| seat-hot | **on** | 3,000 | 1 | - | - | 0 | 0 | **6,976** | 7.76 | 326.46 | 400.93 | 0.43 |
+
+("-": a seat refusal is the same `SEAT_UNAVAILABLE` from the gate or the database, so it is not split.)
+
+- **Correctness is unchanged.** Every run, gate on or off: tickets issued equal stock taken, orders equal sales, the hot seat
+  has exactly one ticket, no unexpected errors. **False rejections are 0**: a refused request counts as false when it would
+  have fitted in the stock left at the end (stock never returns in this benchmark, so that is exact).
+- **When most requests are refused the gate pays.** `ga-soldout-tail` is 2.4x faster (969 to 2,301 ops/s) and the median
+  latency drops from 479 ms to 4.6 ms: 4,064 of 4,967 refusals were answered without a connection, an order insert or a
+  rollback. `seat-hot` is 3.4x faster (2,027 to 6,976 ops/s).
+- **It does not help when stock is plentiful.** `ga-plentiful` is 717 vs 757 ops/s with the gate on: nothing is refused, so
+  the gate only adds one Redis read per request. The 5% difference is one median of three runs; read it as "no gain",
+  not as a measured cost.
+- **The first wave still reaches the database.** All 500 users start at the same instant, before any flag exists, so 903
+  refusals in `ga-soldout-tail` were still the database's and the p95/p99 stay above one second (but lower than without the
+  gate: 1.1 s vs 1.5 s at p95). A real sale ramps up more slowly, which would favour the gate.
+
+**Caveats.**
+- The pool of 10 is a main reason for the gain: a refused request that skips the transaction does not wait for a connection.
+  With a much larger pool the difference would shrink; it was not measured.
+- Redis runs on the same machine, so its round trip is close to free. A remote Redis would cost more per request.
+- Short cells: `seat-hot` lasted 0.43 s (on) and 1.48 s (off). The direction is clear, the factor is not.
+- **False rejections are 0 here only because nothing returns stock yet.** The cost of this design is that after seats or tickets
+  come back (hold expiry, a failed payment), a flag can still refuse for up to the TTL (3 s). The benchmark cannot show that
+  window; it has to be measured once the hold-expiry sweeper exists. The sweeper must clear the flags itself
+  (after the database commit), which shortens the window to nearly nothing.
