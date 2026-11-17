@@ -144,12 +144,14 @@ public class BookingService {
     }
 
     private BaseBookingTicketResult completePayment(Reservation reservation) {
-        Order order = orderRepository.findById(reservation.orderId())
-                .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
-        if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
+        var paid = orderRepository.markOrderPaid(reservation.orderId, clock.instant());
+
+        if(paid == 0){
             throw new BusinessException(ErrorCode.ORDER_NOT_PAYABLE);
         }
-        order.markPaid(clock.instant());
+
+        Order order = orderRepository.findById(reservation.orderId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
 
         return switch (reservation.pending()) {
             case BookingTicketSeatsResult pending -> completeSeats(order, pending);
