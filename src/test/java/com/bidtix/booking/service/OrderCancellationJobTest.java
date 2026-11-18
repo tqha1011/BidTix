@@ -104,6 +104,38 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
     }
 
     @Test
+    void anExpiredAuctionOrder_isLeftAlone_andItsTicketIsNotGivenBack() {
+        Fixture f = fixture(10, 1);
+        // the auction took its ticket from the counter when it was created; only the auction may give it back
+        String auction = insertExpiredOrder(f, "AUCTION", f.zoneDbId(), 1);
+        String booking = insertExpiredOrder(f, "BOOKING", f.zoneDbId(), 1);
+        assertThat(available(f)).isEqualTo(8);
+
+        job.cancelExpiredOrders();
+
+        assertThat(statusOf(auction)).isEqualTo("PENDING_PAYMENT");
+        assertThat(statusOf(booking)).isEqualTo("CANCELLED");
+        assertThat(available(f)).as("only the booking order's ticket came back").isEqualTo(9);
+    }
+
+    @Test
+    void anOrderThatCannotBeCancelled_doesNotStopTheOthersInItsBatch() {
+        Fixture f = fixture(10, 1);
+        long seatedZone = jdbc.queryForObject("select id from ticket_zones where public_id = ?", Long.class, f.seatedZoneId());
+        String first = insertExpiredOrder(f, "BOOKING", f.zoneDbId(), 1);
+        // a standing item in a seated zone: there is no counter to give the ticket back to, so cancelling it fails
+        String broken = insertExpiredOrder(f, "BOOKING", seatedZone, 1);
+        String last = insertExpiredOrder(f, "BOOKING", f.zoneDbId(), 1);
+
+        job.cancelExpiredOrders();
+
+        assertThat(statusOf(first)).isEqualTo("CANCELLED");
+        assertThat(statusOf(last)).isEqualTo("CANCELLED");
+        assertThat(statusOf(broken)).as("rolled back, retried on the next run").isEqualTo("PENDING_PAYMENT");
+        assertThat(available(f)).isEqualTo(10);
+    }
+
+    @Test
     void moreExpiredOrdersThanOneBatch_areAllCancelled() {
         int orders = 250;   // the job reads 100 at a time
         Fixture f = fixture(orders, 1);
@@ -183,6 +215,21 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
     private String bookSeats(Fixture f, UUID user, UUID... seats) {
         return bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seats), null), user).orderCode();
+    }
+
+    /** An unpaid order past its deadline with one standing item, inserted by SQL; the zone counter is lowered like a real hold would. */
+    private String insertExpiredOrder(Fixture f, String source, long zoneDbId, int quantity) {
+        long userId = jdbc.queryForObject("select id from users where public_id = ?", Long.class, f.userIds().get(0));
+        long eventId = jdbc.queryForObject("select id from events where public_id = ?", Long.class, f.eventId());
+        String code = "ORDER_" + UUID.randomUUID().toString().replace("-", "").substring(0, 14).toUpperCase();
+        long orderId = jdbc.queryForObject("insert into orders (user_id, event_id, source, total_amount, expires_at, order_code) "
+                + "values (?, ?, ?, 0, now() - interval '1 minute', ?) returning id", Long.class, userId, eventId, source, code);
+        jdbc.update("insert into order_items (order_id, zone_id, quantity, unit_price) values (?, ?, ?, 300000)",
+                orderId, zoneDbId, quantity);
+        if (zoneDbId == f.zoneDbId()) {
+            jdbc.update("update ticket_zones set available_quantity = available_quantity - ? where id = ?", quantity, zoneDbId);
+        }
+        return code;
     }
 
     private void expire(String orderCode) {

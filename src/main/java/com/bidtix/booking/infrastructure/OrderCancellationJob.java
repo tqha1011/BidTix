@@ -14,20 +14,24 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
- * Cancels orders that were not paid in time and gives their stock back (seats HELD -> AVAILABLE, standing
- * quantity added back to the zone counter).
+ * Cancels booking orders that were not paid in time and gives their stock back (seats HELD -> AVAILABLE, standing
+ * quantity added back to the zone counter). Auction orders are not touched: the auction owns its stock.
  * <p>
- * The job reads a batch of up to {@value #BATCH_SIZE} expired order ids, then handles each order in its own short
- * transaction: lock that one row ({@code FOR UPDATE SKIP LOCKED}), cancel it with a conditional UPDATE (row count
- * checked) and return its stock. An order is never cancelled without its stock coming back, and one order that
- * fails rolls back only itself. Several app instances can run this at once: an order locked by another job, or
- * paid meanwhile, is skipped.
+ * The job reads a batch of up to {@value #BATCH_SIZE} expired order ids and handles the whole batch in one
+ * transaction: lock the orders ({@code FOR UPDATE SKIP LOCKED}, lowest id first), cancel them with one conditional
+ * UPDATE (row count checked) and return their stock, so an order is never cancelled without its stock coming back.
+ * Several app instances can run this at once: an order locked by another job, or paid meanwhile, is skipped.
+ * If a batch fails it rolls back as a whole and its orders are retried one per transaction, so a single order that
+ * cannot be cancelled never blocks the others.
+ * One transaction per batch, not per order, because it is 20-30x faster and the stock comes back sooner (see the
+ * "Cancelling unpaid orders" section of docs/benchmarks.md).
  * <p>
- * After each commit the booking gate flags of the zone and seats that got stock back are cleared (see
+ * After each commit the booking gate flags of the zones and seats that got stock back are cleared (see
  * {@link BookingGateway}); clearing before the commit would let a request set the flag again while the stock
  * is still taken.
  */
@@ -44,62 +48,82 @@ public class OrderCancellationJob {
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
-    /** The gate flags that are out of date after one order gave its stock back. */
-    private record Released(Map<UUID, List<UUID>> seatsByZone, List<UUID> standingZones) {
+    /** What a transaction gave back: how many orders, and which gate flags are now out of date. */
+    private record Released(int orders, Map<UUID, List<UUID>> seatsByZone, List<UUID> standingZones) {
+        static final Released NONE = new Released(0, Map.of(), List.of());
     }
 
     // fixedDelay: the next run starts one minute after the previous one ended, so runs of one instance never overlap
     @Scheduled(fixedDelay = 60_000)
     public void cancelExpiredOrders() {
         int cancelled = 0;
-        int failed = 0;
         long lastId = 0;
         List<Long> batch;
         do {
             batch = orderRepository.findExpiredPendingOrderIds(clock.instant(), lastId, BATCH_SIZE);
-            for (Long orderId : batch) {
-                try {
-                    Released released = transactionTemplate.execute(status -> cancelOrder(orderId));
-                    if (released != null) {
-                        clearGate(released);
-                        cancelled++;
-                    }
-                } catch (RuntimeException e) {
-                    // This order rolled back as a whole, nothing is half done. The others go on; it is retried next run.
-                    failed++;
-                    log.error("Could not cancel expired order {}", orderId, e);
-                }
-            }
             if (!batch.isEmpty()) {
-                lastId = batch.getLast();   // next batch starts after it, so a failing order is not read again
+                cancelled += cancelBatch(batch);
+                lastId = batch.getLast();   // the next batch starts after it, so a failing order is not read again
             }
         } while (batch.size() == BATCH_SIZE);
 
-        if (cancelled > 0 || failed > 0) {
-            log.info("Cancelled {} unpaid orders, {} failed", cancelled, failed);
+        if (cancelled > 0) {
+            log.info("Cancelled {} unpaid orders", cancelled);
         }
     }
 
-    /** One order, one transaction. Returns null when the order is not ours to cancel (locked elsewhere, paid, already cancelled). */
-    private Released cancelOrder(Long orderId) {
-        Instant now = clock.instant();
-        if (orderRepository.lockExpiredPendingOrder(orderId, now).isEmpty()) {
-            return null;
+    /**
+     * The whole batch in one transaction. If it fails it rolls back as a whole, so nothing is half done; then each
+     * order gets its own transaction, so one order that cannot be cancelled does not hold back the others.
+     */
+    private int cancelBatch(List<Long> orderIds) {
+        try {
+            return cancelInTransaction(orderIds);
+        } catch (RuntimeException e) {
+            log.warn("Could not cancel a batch of {} expired orders, trying them one by one: {}", orderIds.size(), e.toString());
         }
 
-        List<Long> ids = List.of(orderId);
-        if (orderRepository.markOrderCancelled(ids, now) != 1) {
-            // The row is locked by us, so this cannot happen unless the lock and the UPDATE disagree. Roll back.
-            throw new IllegalStateException("Locked order " + orderId + " but could not cancel it");
+        int cancelled = 0;
+        for (Long orderId : orderIds) {
+            try {
+                cancelled += cancelInTransaction(List.of(orderId));
+            } catch (RuntimeException e) {
+                log.error("Could not cancel expired order {}; it is retried on the next run", orderId, e);
+            }
+        }
+        return cancelled;
+    }
+
+    private int cancelInTransaction(List<Long> orderIds) {
+        Released released = Objects.requireNonNull(transactionTemplate.execute(status -> cancel(orderIds)));
+        clearGate(released);
+        return released.orders();
+    }
+
+    /** One transaction. Orders that are not ours to cancel (locked elsewhere, paid, already cancelled) are left out. */
+    private Released cancel(List<Long> orderIds) {
+        Instant now = clock.instant();
+        // the ids come lowest first, so every job locks rows in the same order
+        List<Long> ids = orderIds.stream()
+                .filter(id -> orderRepository.lockExpiredPendingOrder(id, now).isPresent())
+                .toList();
+        if (ids.isEmpty()) {
+            return Released.NONE;
+        }
+
+        if (orderRepository.markOrderCancelled(ids, now) != ids.size()) {
+            // The rows are locked by us, so this cannot happen unless the lock and the UPDATE disagree. Roll back.
+            throw new IllegalStateException("Locked " + ids.size() + " orders but could not cancel all of them");
         }
 
         // Read before the update: afterwards the seats no longer say which order held them.
         List<HeldSeat> heldSeats = seatRepository.findHeldByOrderIds(ids);
         int released = seatRepository.releaseSeatsHeldByOrders(ids);
         if (released != heldSeats.size()) {
-            log.warn("Order {}: expected to release {} seats, but actually released {}", orderId, heldSeats.size(), released);
+            log.warn("Expected to release {} seats, but actually released {}", heldSeats.size(), released);
         }
 
+        // ascending zone id (the query orders it), so two jobs never lock the counters in opposite order
         var standing = orderRepository.sumStandingQuantityByZone(ids);
         for (var zone : standing) {
             if (zoneRepository.refundQuantity(zone.getZoneId(), zone.getQuantity().intValue()) != 1) {
@@ -111,7 +135,7 @@ public class OrderCancellationJob {
 
         Map<UUID, List<UUID>> seatsByZone = heldSeats.stream().collect(Collectors.groupingBy(
                 HeldSeat::getZonePublicId, Collectors.mapping(HeldSeat::getSeatPublicId, Collectors.toList())));
-        return new Released(seatsByZone, standingZones);
+        return new Released(ids.size(), seatsByZone, standingZones);
     }
 
     /** Only after the commit: the stock is really back, so the "sold out" memory is wrong from now on. */

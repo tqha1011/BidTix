@@ -118,9 +118,12 @@ the real flow". **Whatever returns stock (the hold-expiry sweeper, giving GA qua
 flags after its database commit**, or customers are refused for up to the TTL.
 
 **Unpaid orders** (`booking/infrastructure/OrderCancellationJob`, every minute after the last run ended): batches of 100 expired
-`PENDING_PAYMENT` order ids are read, then each order gets its own transaction: lock it with `FOR UPDATE SKIP LOCKED`, set to `CANCELLED`, stock back in the same
-transaction (seats `HELD -> AVAILABLE`, GA quantity added to the counter). After each commit it clears the gate flags of the zone
-and seats that got stock back. The status is `CANCELLED`, not `EXPIRED` (the enum value is unused).
+`PENDING_PAYMENT` **booking** order ids are read, and each batch is one transaction: lock the orders with `FOR UPDATE SKIP LOCKED`,
+set them `CANCELLED`, stock back in the same transaction (seats `HELD -> AVAILABLE`, GA quantity added to the counter). A batch that
+fails rolls back as a whole and is retried one order per transaction, so one bad order never blocks the others. After each commit it
+clears the gate flags of the zones and seats that got stock back. Auction orders (`source = 'AUCTION'`) are never touched: the auction
+owns its stock, and returning it here as well would return it twice. The status is `CANCELLED`, not `EXPIRED` (the enum value is unused).
+Why batches and not one transaction per order: [`docs/benchmarks.md`](docs/benchmarks.md), section "Cancelling unpaid orders".
 
 Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`).
 

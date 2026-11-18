@@ -25,22 +25,25 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
 
     /**
-     * Ids of up to {@code limit} unpaid orders whose payment window is over, with id greater than {@code afterId},
-     * lowest first. A plain read, no lock: the job locks and re-checks each order in its own transaction
-     * ({@link #lockExpiredPendingOrder}). Paging by id (not by offset) means an order that cannot be cancelled
-     * never makes the job read the same rows again.
+     * Ids of up to {@code limit} unpaid booking orders whose payment window is over, with id greater than
+     * {@code afterId}, lowest first. A plain read, no lock: the job locks and re-checks the orders inside its
+     * transaction ({@link #lockExpiredPendingOrder}). Paging by id (not by offset) means an order that cannot be
+     * cancelled never makes the job read the same rows again.
      */
-    @Query(value = "select id from orders where status = 'PENDING_PAYMENT' and expires_at <= :now and id > :afterId " +
+    @Query(value = "select id from orders " +
+            "where status = 'PENDING_PAYMENT' " +
+            "and expires_at <= :now and id > :afterId and source = 'BOOKING' " +
             "order by id limit :limit", nativeQuery = true)
     List<Long> findExpiredPendingOrderIds(@Param("now") Instant now, @Param("afterId") long afterId,
                                           @Param("limit") int limit);
 
     /**
-     * Locks one order, but only if it is still unpaid and expired. {@code SKIP LOCKED}: if another job or a
+     * Locks one order, but only if it is still an unpaid, expired booking order (auction orders are not ours: the
+     * auction gives its own stock back). {@code SKIP LOCKED}: if another job or a
      * payment holds the row, this returns empty at once instead of waiting. Call it inside a transaction.
      */
-    @Query(value = "select id from orders where id = :id and status = 'PENDING_PAYMENT' and expires_at <= :now " +
-            "for update skip locked", nativeQuery = true)
+    @Query(value = "select id from orders where id = :id and status = 'PENDING_PAYMENT' and source = 'BOOKING' " +
+            "and expires_at <= :now for update skip locked", nativeQuery = true)
     Optional<Long> lockExpiredPendingOrder(@Param("id") long id, @Param("now") Instant now);
 
     /** What standing (no seat) items of these orders took from each zone's counter, lowest zone id first. */
@@ -60,7 +63,7 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
                     "set o.status = OrderStatus.CANCELLED, " +
                     "o.version = o.version + 1, " +
                     "o.updatedAt = :now " +
-                    "where o.id in :ids and o.status = OrderStatus.PENDING_PAYMENT "
+                    "where o.id in :ids and o.status = OrderStatus.PENDING_PAYMENT and o.source = OrderSource.BOOKING "
     )
     int markOrderCancelled(@Param("ids") List<Long> orderId, @Param("now") Instant now);
 }
