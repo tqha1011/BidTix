@@ -118,8 +118,8 @@ the real flow". **Whatever returns stock (the hold-expiry sweeper, giving GA qua
 flags after its database commit**, or customers are refused for up to the TTL.
 
 **Unpaid orders** (`booking/infrastructure/OrderCancellationJob`, every minute after the last run ended): batches of 100 expired
-`PENDING_PAYMENT` orders are locked with `FOR UPDATE SKIP LOCKED`, set to `CANCELLED`, and their stock comes back in the same
-transaction (seats `HELD -> AVAILABLE`, GA quantity added to the counter). After each commit it clears the gate flags of the zones
+`PENDING_PAYMENT` order ids are read, then each order gets its own transaction: lock it with `FOR UPDATE SKIP LOCKED`, set to `CANCELLED`, stock back in the same
+transaction (seats `HELD -> AVAILABLE`, GA quantity added to the counter). After each commit it clears the gate flags of the zone
 and seats that got stock back. The status is `CANCELLED`, not `EXPIRED` (the enum value is unused).
 
 Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`).

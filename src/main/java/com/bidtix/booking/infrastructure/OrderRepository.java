@@ -8,6 +8,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 
 public interface OrderRepository extends JpaRepository<Order, Long> {
 
@@ -24,14 +25,23 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
 
     /**
-     * Locks and returns the ids of up to {@code limit} orders whose payment window is over, lowest id first.
-     * {@code SKIP LOCKED} makes a second app instance (or a second run) take other rows instead of waiting, so
-     * two jobs never cancel, and give the stock back for, the same order. Call it inside a transaction: the
-     * locks last until it ends.
+     * Ids of up to {@code limit} unpaid orders whose payment window is over, with id greater than {@code afterId},
+     * lowest first. A plain read, no lock: the job locks and re-checks each order in its own transaction
+     * ({@link #lockExpiredPendingOrder}). Paging by id (not by offset) means an order that cannot be cancelled
+     * never makes the job read the same rows again.
      */
-    @Query(value = "select id from orders where status = 'PENDING_PAYMENT' and expires_at <= :now " +
-            "order by id limit :limit for update skip locked", nativeQuery = true)
-    List<Long> lockExpiredPendingOrderIds(@Param("now") Instant now, @Param("limit") int limit);
+    @Query(value = "select id from orders where status = 'PENDING_PAYMENT' and expires_at <= :now and id > :afterId " +
+            "order by id limit :limit", nativeQuery = true)
+    List<Long> findExpiredPendingOrderIds(@Param("now") Instant now, @Param("afterId") long afterId,
+                                          @Param("limit") int limit);
+
+    /**
+     * Locks one order, but only if it is still unpaid and expired. {@code SKIP LOCKED}: if another job or a
+     * payment holds the row, this returns empty at once instead of waiting. Call it inside a transaction.
+     */
+    @Query(value = "select id from orders where id = :id and status = 'PENDING_PAYMENT' and expires_at <= :now " +
+            "for update skip locked", nativeQuery = true)
+    Optional<Long> lockExpiredPendingOrder(@Param("id") long id, @Param("now") Instant now);
 
     /** What standing (no seat) items of these orders took from each zone's counter, lowest zone id first. */
     @Query("select i.zoneId as zoneId, sum(i.quantity) as quantity from Order o join o.items i " +
