@@ -19,7 +19,10 @@ import org.testcontainers.utility.DockerImageName;
 @SpringBootTest
 public abstract class PostgresIntegrationTest {
 
-    private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine");
+    private static final PostgreSQLContainer POSTGRES = new PostgreSQLContainer("postgres:17-alpine")
+            // Every distinct test configuration (@MockitoBean, @TestPropertySource) keeps its own cached Spring
+            // context with its own connection pool; the default of 100 connections ran out.
+            .withCommand("postgres", "-c", "max_connections=300");
 
     private static final String REDIS_PASSWORD = "secret";
     private static final GenericContainer<?> REDIS = new GenericContainer<>(DockerImageName.parse("redis:7-alpine"))

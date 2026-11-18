@@ -45,7 +45,7 @@ seat-hold or payment flow).
 > `GET /events?page=&size=` (published events that have not started, soonest first); both are cached in Redis with
 > a short TTL, and publishing evicts the event pages. Only CUSTOMERs can register, so ADMIN/ORGANIZER users must be
 > inserted by SQL for now.
-> Not started: event cancel and update, hold-expiry sweeper, auction, real payment provider and webhooks,
+> Not started: event cancel and update, auction, real payment provider and webhooks,
 > idempotency filter. Rate limits exist for login, register and logged-in callers; the other public routes need
 > `@RateLimited` when they are added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
@@ -117,8 +117,12 @@ through (fail-open), and the conditional `UPDATE` still decides. Measured effect
 the real flow". **Whatever returns stock (the hold-expiry sweeper, giving GA quantity back, a cancel) must clear the matching
 flags after its database commit**, or customers are refused for up to the TTL.
 
-Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`),
-and nothing releases expired seat holds or returns GA quantity yet.
+**Unpaid orders** (`booking/infrastructure/OrderCancellationJob`, every minute after the last run ended): batches of 100 expired
+`PENDING_PAYMENT` orders are locked with `FOR UPDATE SKIP LOCKED`, set to `CANCELLED`, and their stock comes back in the same
+transaction (seats `HELD -> AVAILABLE`, GA quantity added to the counter). After each commit it clears the gate flags of the zones
+and seats that got stock back. The status is `CANCELLED`, not `EXPIRED` (the enum value is unused).
+
+Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`).
 
 ## Architecture
 

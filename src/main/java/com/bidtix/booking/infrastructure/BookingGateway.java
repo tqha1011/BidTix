@@ -99,6 +99,25 @@ public class BookingGateway {
         }
     }
 
+    /**
+     * Removes the sold-out flag of a zone. Call it after the database commit that gave tickets back, or
+     * customers are refused until the flag expires. A Redis failure is logged and ignored (the flag still expires).
+     */
+    public void clearQuantityRejected(UUID zonePublicId){
+        if(!properties.gateEnabled()){
+            return;
+        }
+        tryDelete(List.of(buildZoneKey(zonePublicId)));
+    }
+
+    /** Removes the flags of seats that were given back. Same rules as {@link #clearQuantityRejected}. */
+    public void clearSeatFlags(UUID zonePublicId, List<UUID> seatPublicIds){
+        if(!properties.gateEnabled() || seatPublicIds.isEmpty()){
+            return;
+        }
+        tryDelete(seatPublicIds.stream().map(id -> buildSeatKey(zonePublicId, id)).toList());
+    }
+
     private String buildZoneKey(UUID zonePublicId){
         return PREFIX + "zone:" + zonePublicId;
     }
@@ -106,6 +125,15 @@ public class BookingGateway {
     /** The zone is part of the key: a seat named with the wrong zone must not flag the same seat in its own zone. */
     private String buildSeatKey(UUID zonePublicId, UUID seatPublicId){
         return PREFIX + "seat:" + zonePublicId + ":" + seatPublicId;
+    }
+
+    private void tryDelete(List<String> keys){
+        try {
+            redisTemplate.delete(keys);
+        }
+        catch(DataAccessException e){
+            log.warn("Redis error while trying to clear {} gate key(s): {}", keys.size(), e.getMessage());
+        }
     }
 
     private void trySet(String key, String value){

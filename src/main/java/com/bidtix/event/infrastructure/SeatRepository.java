@@ -45,4 +45,26 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
     /** Public ids of the seats an order currently holds (read from the DB, not the persistence context). */
     @Query("select s.publicId from Seat s where s.heldByOrderId = :orderId")
     Set<UUID> findPublicIdsHeldByOrderId(Long orderId);
+
+
+    /** Seats that these orders hold, with their zone, so the booking gate flags of the zone can be cleared. */
+    @Query("select s.publicId as seatPublicId, s.zone.publicId as zonePublicId from Seat s " +
+            "where s.heldByOrderId in :orderIds and s.status = 'HELD'")
+    List<HeldSeat> findHeldByOrderIds(List<Long> orderIds);
+
+    /**
+     * Gives back every seat these orders hold (HELD -> AVAILABLE). Only HELD seats change, so a seat that was
+     * already sold or released is never touched. Returns the number of seats released.
+     */
+    @Modifying
+    @Query("update Seat s " +
+            "set s.status = 'AVAILABLE', s.heldByOrderId = null, s.holdExpiresAt = null, s.version = s.version + 1 " +
+            "where s.heldByOrderId in :orderIds and s.status = 'HELD'")
+    int releaseSeatsHeldByOrders(List<Long> orderIds);
+
+    interface HeldSeat {
+        UUID getSeatPublicId();
+
+        UUID getZonePublicId();
+    }
 }

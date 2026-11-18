@@ -30,4 +30,12 @@ public interface TicketZoneRepository extends JpaRepository<TicketZone, Long> {
     /** Read straight from the database (a scalar query), so it sees an update made earlier in the same transaction. */
     @Query("select z.availableQuantity from TicketZone z where z.id = :zoneId")
     Integer findAvailableQuantity(Long zoneId);
+
+
+    /** Gives back {@code quantity} tickets to a general-admission zone. Returns 1 if the zone was updated. */
+    @Modifying
+    @Query("update TicketZone z " +
+            "set z.availableQuantity = z.availableQuantity + :quantity, z.version = z.version + 1 " +
+            "where z.id = :zoneId and z.zoneType = 'GENERAL_ADMISSION'")
+    int refundQuantity(Long zoneId, int quantity);
 }
