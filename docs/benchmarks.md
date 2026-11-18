@@ -400,3 +400,65 @@ JVM 21. Per scenario: 1 warm-up run (discarded) + 3 measured runs on a fresh zon
   come back (hold expiry, a failed payment), a flag can still refuse for up to the TTL (3 s). The benchmark cannot show that
   window; it has to be measured once the hold-expiry sweeper exists. The sweeper must clear the flags itself
   (after the database commit), which shortens the window to nearly nothing.
+
+
+## Cancelling unpaid orders: one transaction per order or per many
+
+`OrderCancellationJob` returns the stock of orders nobody paid. This benchmark asks what the transaction size costs.
+`OrderCancellationBenchmarkTest` writes the job's steps again (lock the order, cancel it, release seats, add the
+quantity back) and changes only how many orders share one transaction: 1, 10, 100 or 500. It uses the real application
+and PostgreSQL 17 in Docker, connection pool 40.
+
+```bash
+make bench-cancel                      # writes target/benchmark/order-cancellation.md
+make bench-cancel RUNS=5 SIZES=1,25,100 BOOKERS=32 POOL=40
+```
+
+Run of 2026-11-18: 12 cores, JVM 21, per cell 1 warm-up run (discarded) + 3 measured runs on fresh data, the row is the median.
+
+**1. The job alone**, 5,000 expired orders (seated: 2 seats each; standing: 1-2 tickets each, all from one zone counter)
+
+| orders | per transaction | transactions | seconds | orders/s |
+|---|--:|--:|--:|--:|
+| seated | 1 | 5,000 | 14.61 | 342 |
+| seated | 10 | 500 | 1.95 | 2,570 |
+| seated | 100 | 50 | 0.57 | 8,764 |
+| seated | 500 | 10 | 0.55 | 9,131 |
+| standing | 1 | 5,000 | 19.41 | 258 |
+| standing | 10 | 500 | 2.14 | 2,332 |
+| standing | 100 | 50 | 0.64 | 7,852 |
+| standing | 500 | 10 | 0.54 | 9,279 |
+
+**2. The job next to customers**: 3,000 expired standing orders in a zone while 16 threads keep buying 1 ticket of the
+same zone (`bookTicket`, mock payment). "before" is the 2 s before the job starts, "during" is the job's run.
+
+| per transaction | job s | before: req/s | p50 ms | p99 ms | max ms | during: req/s | p50 ms | p99 ms | max ms | errors |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 1 | 117.51 | 135 | 90.0 | 484.1 | 598.9 | 375 | 28.3 | 274.3 | 1120.0 | 0 |
+| 10 | 9.25 | 602 | 21.0 | 89.7 | 145.3 | 522 | 23.2 | 126.2 | 213.6 | 0 |
+| 100 | 2.02 | 115 | 100.4 | 622.2 | 783.7 | 426 | 24.9 | 226.4 | 495.6 | 0 |
+| 500 | 0.90 | 593 | 21.3 | 98.7 | 147.3 | 582 | 21.4 | 94.6 | 144.4 | 0 |
+
+**What the numbers say**
+- **Many small transactions are much slower for the job**: 20-35x slower at 1 order per transaction than at 100 (about 260-340
+  orders/s against 7,900-8,800), because every transaction pays its own round trips and its own commit.
+- **Next to customers the gap is larger**: 117 s for 3,000 orders (about 26 orders/s) at 1 per transaction, against 2 s at 100.
+  Each refund has to queue for the zone counter row, which the 16 buyers update all the time, and with 1 order per transaction
+  every order pays that wait. At that speed a flash sale that leaves 20,000 unpaid orders needs more than 10 minutes to give
+  the stock back; the tickets stay unsold that long.
+- **No harm to customers from the bigger transactions was measured.** At 500 per transaction the buyers' p99 was 94.6 ms during
+  the job and 98.7 ms before it, with no errors. The refund is one of the last statements of the transaction, so the counter row is
+  locked only until the commit. The worry that a long transaction would block buyers did not show up here.
+
+**Caveats**
+- **Experiment 2 is noisy and its latency columns should not be compared across rows.** The "before" column was measured with
+  the same setup in every row and still varies from 115 to 602 req/s (the rows of size 1 and 100 had a slow baseline). Read
+  only the job duration, the absence of errors and the during/before comparison inside the 500 row. A bigger RUNS would help.
+- Only the standing zone was run next to customers. The seated job next to buyers of the same zone was not measured.
+- One machine, PostgreSQL in Docker, mock payment, 16 buyers. Redis gate clearing is left out (same for every size).
+- The orders per transaction here are the only change; the job's batch read (100 ids) is part of the 1 / 10 / 100 rows.
+- A larger transaction means that one bad order rolls back all the others in it. The benchmark measures speed, not that risk.
+
+**Decision.** `OrderCancellationJob` uses one transaction per batch of 100 orders. If a batch fails, its orders are retried one
+per transaction, so a single bad order does not hold back the others (a test covers it: without the retry, one order that
+cannot be cancelled made every batch containing it roll back, once a minute, for good).

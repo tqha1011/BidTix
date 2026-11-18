@@ -4,7 +4,7 @@
 MVN := ./mvnw
 
 .DEFAULT_GOAL := help
-.PHONY: help keys run run-local run-seed test bench bench-gate test-one build clean db-up db-down psql
+.PHONY: help keys run run-local run-seed test bench bench-gate bench-cancel test-one build clean db-up db-down psql
 
 help: ## Show this list
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -46,12 +46,18 @@ bench: ## Run the anti-overselling benchmark (slow, Docker): make bench [ONLY=op
 		$(if $(VIRTUAL),-Dbench.virtual=$(VIRTUAL)) \
 		$(if $(RATIOS),-Dbench.ratios=$(RATIOS)) $(if $(REQUESTS),-Dbench.requests=$(REQUESTS))
 
-bench-gate: ## Benchmark the booking gate on the real booking flow, gate on then off: make bench-gate [RUNS=3] [THREADS=500] [SCALE=1]
+bench-gate: ## Benchmark the booking gate on the real booking flow, gate on then off: make bench-gate [RUNS=3] [THREADS=500] [SCALE=1] [POOL=10]
 	for g in true false; do \
 		$(MVN) test -Dgroups=benchmark -Dbenchmark.excludedGroups=none -Dtest=BookingGateBenchmarkTest \
 			-Dbidtix.booking.gate-enabled=$$g $(if $(RUNS),-Dbench.runs=$(RUNS)) \
-			$(if $(THREADS),-Dbench.threads=$(THREADS)) $(if $(SCALE),-Dbench.scale=$(SCALE)) || exit 1; \
+			$(if $(THREADS),-Dbench.threads=$(THREADS)) $(if $(SCALE),-Dbench.scale=$(SCALE)) \
+			$(if $(POOL),-Dspring.datasource.hikari.maximum-pool-size=$(POOL)) || exit 1; \
 	done
+
+bench-cancel: ## Benchmark cancelling unpaid orders, 1 vs many orders per transaction: make bench-cancel [RUNS=3] [SCALE=1] [SIZES=1,10,100,500] [BOOKERS=16] [POOL=40]
+	$(MVN) test -Dgroups=benchmark -Dbenchmark.excludedGroups=none -Dtest=OrderCancellationBenchmarkTest \
+		-Dspring.datasource.hikari.maximum-pool-size=$(or $(POOL),40) $(if $(RUNS),-Dbench.runs=$(RUNS)) \
+		$(if $(SCALE),-Dbench.scale=$(SCALE)) $(if $(SIZES),-Dbench.sizes=$(SIZES)) $(if $(BOOKERS),-Dbench.bookers=$(BOOKERS))
 
 build: ## Build the jar without running tests
 	$(MVN) clean package -DskipTests
