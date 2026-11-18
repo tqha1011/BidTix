@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="610" height="240" viewBox="0 0 610 240" role="img" aria-labelledby="t d">
+  <title id="t">BidTix</title>
+  <desc id="d">A concert ticket whose bars rise like bids and whose stub carries a check mark, next to the word BidTix.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0f172a"/>
+      <stop offset="1" stop-color="#1e1b4b"/>
+    </linearGradient>
+    <linearGradient id="ticket" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fbbf24"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+
+  <!-- badge background -->
+  <rect x="2" y="2" width="606" height="236" rx="32" fill="url(#bg)" stroke="#334155" stroke-width="2"/>
+
+  <!-- ticket: rounded body with a notch at the top and bottom of the perforation -->
+  <path fill="url(#ticket)"
+        d="M64 60H178A10 10 0 0 0 198 60H232A16 16 0 0 1 248 76V164A16 16 0 0 1 232 180H198A10 10 0 0 0 178 180H64A16 16 0 0 1 48 164V76A16 16 0 0 1 64 60Z"/>
+  <!-- perforation -->
+  <line x1="188" y1="76" x2="188" y2="164" stroke="#ffffff" stroke-opacity="0.6" stroke-width="2.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+
+  <!-- rising bids; the highest one wins -->
+  <g>
+    <rect x="68"  y="136" width="20" height="24" rx="4" fill="#ffffff" fill-opacity="0.55"/>
+    <rect x="96"  y="120" width="20" height="40" rx="4" fill="#ffffff" fill-opacity="0.7"/>
+    <rect x="124" y="102" width="20" height="58" rx="4" fill="#ffffff" fill-opacity="0.85"/>
+    <rect x="152" y="80"  width="20" height="80" rx="4" fill="url(#gold)"/>
+  </g>
+
+  <!-- sold: one seat, one ticket -->
+  <path d="M210 121l9 9 17-19" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- wordmark -->
+  <text x="284" y="138" font-family="'Inter','Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif" font-size="82" font-weight="800" letter-spacing="-2" fill="#f8fafc">Bid<tspan fill="url(#gold)">Tix</tspan></text>
+  <text x="288" y="176" font-family="'Inter','Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif" font-size="19" font-weight="500" letter-spacing="0.4" fill="#94a3b8">No overselling. No lost bids.</text>
+</svg>
