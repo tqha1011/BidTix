@@ -1,5 +1,7 @@
 package com.bidtix.config.security;
 
+import com.bidtix.auction.controller.AuctionController;
+import com.bidtix.auction.service.AuctionService;
 import com.bidtix.booking.controller.AdminTicketController;
 import com.bidtix.booking.service.AdminTicketService;
 import com.bidtix.config.exceptions.GlobalExceptionHandler;
@@ -60,7 +62,13 @@ class MethodAuthorizationTest {
     private static final String ZONE_BODY =
             "{\"name\":\"GA\",\"zoneType\":\"GENERAL_ADMISSION\",\"price\":500000,\"capacity\":100}";
 
+    private static final String AUCTION_BODY = """
+            {"eventPublicId":"%s","zonePublicId":"%s","startPrice":100000,"minIncrement":10000,
+             "startsAt":"2030-05-01T00:00:00Z","endsAt":"2030-05-02T00:00:00Z"}
+            """.formatted(UUID.randomUUID(), UUID.randomUUID());
+
     @Autowired WebApplicationContext context;
+    @Autowired AuctionService auctionService;
     @Autowired JwtDecoder jwtDecoder;
     @Autowired EventService eventService;
 
@@ -131,6 +139,37 @@ class MethodAuthorizationTest {
             mvc.perform(json(post("/api/v1/events/" + UUID.randomUUID() + "/zones"), role, ZONE_BODY))
                     .andExpect(forbidden());
         }
+    }
+
+    // ---- POST /auctions: ORGANIZER only -------------------------------------------------------
+
+    @Test
+    void createAuction_organizer_isAllowed_andServiceGetsTheTokenSubject() throws Exception {
+        mvc.perform(json(post("/api/v1/auctions"), "ORGANIZER", AUCTION_BODY)).andExpect(status().isCreated());
+
+        verify(auctionService).createAuction(eq(USER_ID), any());
+    }
+
+    @Test
+    void createAuction_adminAndCustomer_areForbidden() throws Exception {
+        for (String role : List.of("ADMIN", "CUSTOMER")) {
+            mvc.perform(json(post("/api/v1/auctions"), role, AUCTION_BODY)).andExpect(forbidden());
+        }
+    }
+
+    @Test
+    void createAuction_withoutToken_is401() throws Exception {
+        mvc.perform(post("/api/v1/auctions").contentType(MediaType.APPLICATION_JSON).content(AUCTION_BODY))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.code").value("UNAUTHORIZED"));
+    }
+
+    @Test
+    void createAuction_invalidBody_is400WithFieldErrors() throws Exception {
+        mvc.perform(json(post("/api/v1/auctions"), "ORGANIZER", "{\"startPrice\":0}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errors").isNotEmpty());
     }
 
     // ---- POST /events/{id}/publish: ORGANIZER only --------------------------------------------
@@ -231,12 +270,13 @@ class MethodAuthorizationTest {
     @EnableWebMvc
     @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class,
             GlobalExceptionHandler.class, VenueController.class, EventController.class,
-            AdminTicketController.class})
+            AdminTicketController.class, AuctionController.class})
     static class TestConfig {
         @Bean JwtDecoder jwtDecoder() { return mock(JwtDecoder.class); }
         @Bean VenueService venueService() { return mock(VenueService.class); }
         @Bean EventService eventService() { return mock(EventService.class); }
         @Bean ZoneService zoneService() { return mock(ZoneService.class); }
         @Bean AdminTicketService adminTicketService() { return mock(AdminTicketService.class); }
+        @Bean AuctionService auctionService() { return mock(AuctionService.class); }
     }
 }
