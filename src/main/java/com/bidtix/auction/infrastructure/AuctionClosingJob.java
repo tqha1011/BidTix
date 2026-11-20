@@ -1,18 +1,10 @@
 package com.bidtix.auction.infrastructure;
 
 import com.bidtix.auction.domain.Auction;
-import com.bidtix.auction.domain.AuctionOffer;
 import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.domain.Bid;
-import com.bidtix.booking.domain.Order;
-import com.bidtix.booking.domain.OrderSource;
-import com.bidtix.booking.infrastructure.BookingGateway;
-import com.bidtix.booking.infrastructure.BookingProperties;
-import com.bidtix.booking.infrastructure.OrderRepository;
-import com.bidtix.common.utils.GenerateOrderCode;
-import com.bidtix.event.domain.Seat;
-import com.bidtix.event.infrastructure.SeatRepository;
-import com.bidtix.event.infrastructure.TicketZoneRepository;
+import com.bidtix.auction.service.AuctionSettlementService;
+import com.bidtix.auction.service.AuctionSettlementService.Returned;
 import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -22,9 +14,7 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.UUID;
 
 /**
  * Closes auctions whose end time has passed. {@code ends_at} is already the real end: a bid inside the anti-sniping
@@ -48,23 +38,13 @@ import java.util.UUID;
 @Slf4j
 public class AuctionClosingJob {
     static final int BATCH_SIZE = 100;
-    static final int QUANTITY_TO_RELEASE = 1;
     static final int OFFER_RANK = 1;
 
     private final AuctionRepository auctionRepository;
-    private final AuctionOfferRepository auctionOfferRepository;
-    private final OrderRepository orderRepository;
-    private final TicketZoneRepository ticketZoneRepository;
     private final BidRepository bidRepository;
-    private final SeatRepository seatRepository;
-    private final BookingProperties properties;
-    private final BookingGateway bookingGateway;
+    private final AuctionSettlementService settlement;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
-
-    /** The gate flags that are out of date after a failed auction gave its ticket back. */
-    private record Returned(UUID zonePublicId, @Nullable UUID seatPublicId) {
-    }
 
     /** What closing one auction produced; {@code returned} is set only when a ticket went back on sale. */
     private record Closed(@Nullable Returned returned) {
@@ -83,7 +63,7 @@ public class AuctionClosingJob {
                 try {
                     Closed result = transactionTemplate.execute(status -> close(auctionId));
                     if (result != null) {
-                        clearGate(result.returned());
+                        settlement.clearGate(result.returned());
                         closed++;
                     }
                 } catch (RuntimeException e) {
@@ -114,70 +94,16 @@ public class AuctionClosingJob {
         Long price = auction.getCurrentPrice();
         Long reserve = auction.getReservePrice();
         boolean hasWinner = price != null && (reserve == null || price >= reserve);
-        return hasWinner ? award(auction, price, now) : fail(auction, now);
-    }
+        if (!hasWinner) {
+            return new Closed(settlement.fail(auction, AuctionStatus.LIVE, now));
+        }
 
-    private Closed award(Auction auction, long price, Instant now) {
         Bid winningBid = bidRepository.findByAuctionIdAndBidderIdAndAmount(
                         auction.getId(), auction.getLeadingBidderId(), price)
                 .orElseThrow(() -> new IllegalStateException("Auction " + auction.getId()
                         + " has a leader and a price but no bid with that amount"));
-        changeStatus(auction, AuctionStatus.AWAITING_PAYMENT, now);
-
-        // one deadline for the order and the offer: a gap between them would let the ticket be paid twice
-        Instant deadline = now.plus(properties.orderExpirationMinutes(), ChronoUnit.MINUTES);
-        Order order = new Order(winningBid.getBidderId(), auction.getEventId(), GenerateOrderCode.generate(),
-                OrderSource.AUCTION, deadline);
-        order.addItem(auction.getZoneId(), auction.getSeatId(), QUANTITY_TO_RELEASE, price);
-        orderRepository.saveAndFlush(order);
-
-        auctionOfferRepository.saveAndFlush(new AuctionOffer(auction, winningBid, OFFER_RANK, order.getId(), deadline));
+        settlement.changeStatus(auction, AuctionStatus.LIVE, AuctionStatus.AWAITING_PAYMENT, now);
+        settlement.openOffer(auction, winningBid, OFFER_RANK, now);
         return new Closed(null);
-    }
-
-    private Closed fail(Auction auction, Instant now) {
-        changeStatus(auction, AuctionStatus.FAILED, now);
-        Returned returned = release(auction);
-        return new Closed(returned);
-    }
-
-    /** LIVE -> {@code status}. The row is locked by us, so a count other than 1 means the lock and the UPDATE disagree. */
-    private void changeStatus(Auction auction, AuctionStatus status, Instant now) {
-        if (auctionRepository.updateAuctionStatus(auction.getId(), status, now) != 1) {
-            throw new IllegalStateException("Locked auction " + auction.getId() + " but could not move it to " + status);
-        }
-    }
-
-    /** Puts the auctioned ticket back on sale and says which gate flags that makes out of date. */
-    private Returned release(Auction auction) {
-        UUID zonePublicId = ticketZoneRepository.findPublicIdByid(auction.getZoneId())
-                .orElseThrow(() -> new IllegalStateException("Zone " + auction.getZoneId() + " of auction "
-                        + auction.getId() + " not found"));
-
-        if (auction.getSeatId() != null) {
-            Seat seat = seatRepository.findById(auction.getSeatId())
-                    .orElseThrow(() -> new IllegalStateException("Seat " + auction.getSeatId() + " not found"));
-            if (seatRepository.releaseSeatFromAuction(auction.getSeatId()) != 1) {
-                throw new IllegalStateException("Seat " + auction.getSeatId() + " was not reserved for the auction");
-            }
-            return new Returned(zonePublicId, seat.getPublicId());
-        }
-
-        if (ticketZoneRepository.refundQuantity(auction.getZoneId(), QUANTITY_TO_RELEASE) != 1) {
-            throw new IllegalStateException("Zone " + auction.getZoneId() + " not found to give the ticket back to");
-        }
-        return new Returned(zonePublicId, null);
-    }
-
-    /** Only after the commit: the ticket is really back, so the "sold out" memory is wrong from now on. */
-    private void clearGate(@Nullable Returned returned) {
-        if (returned == null) {
-            return;
-        }
-        if (returned.seatPublicId() != null) {
-            bookingGateway.clearSeatFlags(returned.zonePublicId(), List.of(returned.seatPublicId()));
-        } else {
-            bookingGateway.clearQuantityRejected(returned.zonePublicId());
-        }
     }
 }

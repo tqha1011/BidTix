@@ -51,7 +51,11 @@ seat-hold or payment flow).
 > `AuctionClosingJob` (every minute, one transaction per auction) closes a LIVE auction whose `ends_at` has passed: a winner (price and
 > at least the reserve) makes it AWAITING_PAYMENT with an AUCTION order and a rank-1 offer that share one deadline; no bid or a price
 > under the reserve makes it FAILED and puts the ticket back on sale (seat AVAILABLE, or +1 on the zone counter) and clears the gate flags.
-> Not started: event cancel and update, the rest of the auction (bids, offer expiry and next rank, cancel), real payment provider and webhooks,
+> `AuctionOfferExpiryJob` (every minute, one transaction per offer) handles an unpaid offer past its deadline: it cancels the AUCTION order (the
+> only thing that does), and the right to buy passes to the highest bidder who has not had an offer, at their own highest bid and if it reaches
+> the reserve; with nobody left the auction FAILS like above. An order paid at the last moment makes the offer ACCEPTED and the auction SETTLED.
+> The shared steps (open an offer, fail an auction) are in `AuctionSettlementService`.
+> Not started: event cancel and update, the rest of the auction (bids, cancel), real payment provider and webhooks,
 > idempotency filter. Rate limits exist for login, register and logged-in callers; the other public routes need
 > `@RateLimited` when they are added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
@@ -128,7 +132,7 @@ flags after its database commit**, or customers are refused for up to the TTL.
 set them `CANCELLED`, stock back in the same transaction (seats `HELD -> AVAILABLE`, GA quantity added to the counter). A batch that
 fails rolls back as a whole and is retried one order per transaction, so one bad order never blocks the others. After each commit it
 clears the gate flags of the zones and seats that got stock back. Auction orders (`source = 'AUCTION'`) are never touched: the auction
-owns its stock, and returning it here as well would return it twice. The status is `CANCELLED`, not `EXPIRED` (the enum value is unused).
+owns its stock, and returning it here as well would return it twice (`AuctionOfferExpiryJob` cancels those orders). The status is `CANCELLED`, not `EXPIRED` (the enum value is unused).
 Why batches and not one transaction per order: [`docs/benchmarks.md`](docs/benchmarks.md), section "Cancelling unpaid orders".
 
 Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`).
@@ -168,7 +172,7 @@ auth/      controller, service, infrastructure, dtos, domain   done: register / 
 user/      domain, infrastructure                              entity + repository only, no API yet
 event/     controller, dtos, service, infrastructure, domain   venue / event / zone+seats creation (organizer, admin)
 booking/   domain, dto, service, infrastructure                seated booking flow done; sweeper, GA, controller planned
-auction/   controller, dtos, service, infrastructure, domain    create + activation + closing done; bids, offer expiry planned
+auction/   controller, dtos, service, infrastructure, domain    create + activation + closing + offer expiry done; bids planned
 payment/   domain, service, infrastructure                     PaymentGateway + mock; webhook inbox entity (real provider planned)
 common/    domain (BaseEntity), utils, idempotency             shared by every module
 config/    security, exceptions, ClockConfig                   cross-cutting Spring setup, see below

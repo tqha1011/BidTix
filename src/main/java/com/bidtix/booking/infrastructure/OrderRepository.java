@@ -1,6 +1,7 @@
 package com.bidtix.booking.infrastructure;
 
 import com.bidtix.booking.domain.Order;
+import com.bidtix.booking.domain.OrderStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -66,4 +67,18 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
                     "where o.id in :ids and o.status = OrderStatus.PENDING_PAYMENT and o.source = OrderSource.BOOKING "
     )
     int markOrderCancelled(@Param("ids") List<Long> orderId, @Param("now") Instant now);
+
+    /**
+     * Cancels an unpaid AUCTION order (PENDING_PAYMENT -&gt; CANCELLED). {@code markOrderCancelled} cannot do it: it only
+     * touches booking orders, because the auction gives its own stock back. The caller MUST check the returned row count:
+     * 0 means the order is not unpaid any more, which usually means it was paid at the last moment.
+     */
+    @Modifying
+    @Query("update Order o set o.status = OrderStatus.CANCELLED, o.version = o.version + 1, o.updatedAt = :now " +
+            "where o.id = :orderId and o.status = OrderStatus.PENDING_PAYMENT and o.source = OrderSource.AUCTION")
+    int cancelAuctionOrder(@Param("orderId") Long orderId, @Param("now") Instant now);
+
+    /** Read from the database (a scalar query), so it sees an update made earlier in the same transaction. */
+    @Query("select o.status from Order o where o.id = :orderId")
+    Optional<OrderStatus> findStatusById(@Param("orderId") Long orderId);
 }

@@ -48,12 +48,13 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
     Optional<Auction> lockEndedAuction(@Param("id") long id, @Param("now") Instant now);
 
     /**
-     * LIVE -&gt; {@code status}, only if the auction is still LIVE and over. The caller MUST check the returned row
-     * count (1 = changed). A bulk update does not run {@code @UpdateTimestamp}, so {@code updated_at} is set here.
+     * {@code expected} -&gt; {@code next}, only if the auction is still in the {@code expected} status. The caller MUST
+     * check the returned row count (1 = changed). A bulk update does not run {@code @UpdateTimestamp}, so
+     * {@code updated_at} is set here.
      */
     @Modifying
-    @Query("update Auction a set a.status = :status, a.version = a.version + 1, a.updatedAt = :now " +
-            "where a.id = :auctionId and a.endsAt <= :now and a.status = 'LIVE'")
-    int updateAuctionStatus(@Param("auctionId") Long auctionId, @Param("status") AuctionStatus status,
-                            @Param("now") Instant now);
+    @Query("update Auction a set a.status = :next, a.version = a.version + 1, a.updatedAt = :now " +
+            "where a.id = :auctionId and a.status = :expected")
+    int updateAuctionStatus(@Param("auctionId") Long auctionId, @Param("expected") AuctionStatus expected,
+                            @Param("next") AuctionStatus next, @Param("now") Instant now);
 }
