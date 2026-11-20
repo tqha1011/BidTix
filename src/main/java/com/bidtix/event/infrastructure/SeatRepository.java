@@ -77,6 +77,12 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
             "where s.id = :seatId and s.status = 'AVAILABLE' and s.heldByOrderId is null")
     int reserveForAuction(Long seatId);
 
+    @Modifying
+    @Query("update Seat s " +
+            "set s.status = 'AVAILABLE', s.version = s.version + 1 " +
+            "where s.id = :seatId and s.status = 'RESERVED_FOR_AUCTION'")
+    int releaseSeatFromAuction(Long seatId);
+
     interface HeldSeat {
         UUID getSeatPublicId();
 
