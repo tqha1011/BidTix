@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.Query;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 
@@ -61,6 +62,20 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
             "set s.status = 'AVAILABLE', s.heldByOrderId = null, s.holdExpiresAt = null, s.version = s.version + 1 " +
             "where s.heldByOrderId in :orderIds and s.status = 'HELD'")
     int releaseSeatsHeldByOrders(List<Long> orderIds);
+
+    /** A seat of the given zone; a seat named with the wrong zone is "not found", like zones of another event. */
+    Optional<Seat> findByPublicIdAndZoneId(UUID publicId, Long zoneId);
+
+    /**
+     * Takes a free seat out of normal sale because it is being auctioned (AVAILABLE -&gt; RESERVED_FOR_AUCTION). The
+     * condition and the change are one statement, so a booking holding the seat and an auction cannot both get it.
+     * The caller MUST check the returned row count: 1 = reserved, 0 = the seat is not free any more.
+     */
+    @Modifying
+    @Query("update Seat s " +
+            "set s.status = 'RESERVED_FOR_AUCTION', s.version = s.version + 1 " +
+            "where s.id = :seatId and s.status = 'AVAILABLE' and s.heldByOrderId is null")
+    int reserveForAuction(Long seatId);
 
     interface HeldSeat {
         UUID getSeatPublicId();

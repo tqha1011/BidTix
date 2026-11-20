@@ -44,8 +44,11 @@ seat-hold or payment flow).
 > zone), `GET /admin/events/{id}/tickets` (ADMIN). Any logged-in user can read `GET /venues/{publicId}` and
 > `GET /events?page=&size=` (published events that have not started, soonest first); both are cached in Redis with
 > a short TTL, and publishing evicts the event pages. Only CUSTOMERs can register, so ADMIN/ORGANIZER users must be
-> inserted by SQL for now.
-> Not started: event cancel and update, auction, real payment provider and webhooks,
+> inserted by SQL for now. `POST /api/v1/auctions` (ORGANIZER, owner of a PUBLISHED event) creates a SCHEDULED auction for
+> one seat or one standing ticket and takes that ticket out of sale in the same transaction (`AuctionService.createAuction`);
+> `AuctionActivationJob` (every 5 s) opens it, SCHEDULED to LIVE, once `starts_at` has passed (one conditional UPDATE with
+> `FOR UPDATE SKIP LOCKED`; there is no manual "start" endpoint, so a bid is only accepted on a LIVE auction).
+> Not started: event cancel and update, the rest of the auction (bids, closing, offers, cancel), real payment provider and webhooks,
 > idempotency filter. Rate limits exist for login, register and logged-in callers; the other public routes need
 > `@RateLimited` when they are added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
@@ -162,7 +165,7 @@ auth/      controller, service, infrastructure, dtos, domain   done: register / 
 user/      domain, infrastructure                              entity + repository only, no API yet
 event/     controller, dtos, service, infrastructure, domain   venue / event / zone+seats creation (organizer, admin)
 booking/   domain, dto, service, infrastructure                seated booking flow done; sweeper, GA, controller planned
-auction/   domain                                              auctions, bids, offers (closing job planned)
+auction/   controller, dtos, service, infrastructure, domain    create + activation done; bids, closing, offers planned
 payment/   domain, service, infrastructure                     PaymentGateway + mock; webhook inbox entity (real provider planned)
 common/    domain (BaseEntity), utils, idempotency             shared by every module
 config/    security, exceptions, ClockConfig                   cross-cutting Spring setup, see below
