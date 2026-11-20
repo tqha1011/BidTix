@@ -38,4 +38,7 @@ public interface TicketZoneRepository extends JpaRepository<TicketZone, Long> {
             "set z.availableQuantity = z.availableQuantity + :quantity, z.version = z.version + 1 " +
             "where z.id = :zoneId and z.zoneType = 'GENERAL_ADMISSION'")
     int refundQuantity(Long zoneId, int quantity);
+
+    @Query("select z.publicId from TicketZone z where z.id = :id")
+    Optional<UUID> findPublicIdByid(Long id);
 }
