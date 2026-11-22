@@ -2,16 +2,25 @@ package com.bidtix.auction.infrastructure;
 
 import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 public interface AuctionRepository extends JpaRepository<Auction, Long> {
+
+    /** A page of auctions in any of these statuses. A plain read, no lock. */
+    Page<Auction> findByStatusIn(Collection<AuctionStatus> statuses, Pageable pageable);
+
+    /** Same, for one event (internal id). */
+    Page<Auction> findByEventIdAndStatusIn(Long eventId, Collection<AuctionStatus> statuses, Pageable pageable);
 
     /**
      * Opens up to {@code limit} auctions whose start time has come (SCHEDULED -&gt; LIVE), lowest id first, and returns how

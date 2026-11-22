@@ -46,7 +46,7 @@ seat-hold or payment flow).
 > a short TTL, and publishing evicts the event pages. Only CUSTOMERs can register, so ADMIN/ORGANIZER users must be
 > inserted by SQL for now. `POST /api/v1/auctions` (ORGANIZER, owner of a PUBLISHED event) creates a SCHEDULED auction for
 > one seat or one standing ticket and takes that ticket out of sale in the same transaction (`AuctionService.createAuction`);
-> `AuctionActivationJob` (every 5 s) opens it, SCHEDULED to LIVE, once `starts_at` has passed (one conditional UPDATE with
+> `GET /api/v1/auctions?status=&eventPublicId=&page=&size=` (any logged-in user) lists auctions soonest ending first, open ones (SCHEDULED, LIVE) by default, with the public ids of the auction, event, zone and seat; it is not cached because price and bid count change on every bid. `AuctionActivationJob` (every 5 s) opens it, SCHEDULED to LIVE, once `starts_at` has passed (one conditional UPDATE with
 > `FOR UPDATE SKIP LOCKED`; there is no manual "start" endpoint, so a bid is only accepted on a LIVE auction).
 > `AuctionClosingJob` (every minute, one transaction per auction) closes a LIVE auction whose `ends_at` has passed: a winner (price and
 > at least the reserve) makes it AWAITING_PAYMENT with an AUCTION order and a rank-1 offer that share one deadline; no bid or a price

@@ -1,5 +1,6 @@
 package com.bidtix.auction.dtos;
 
+import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionStatus;
 
 import java.time.Instant;
@@ -20,4 +21,12 @@ public record AuctionResponse(
         int antiSnipeWindowSec,
         int extensionSec,
         AuctionStatus status) {
+
+    /** The event, zone and seat are stored as internal ids, so the caller hands in their public ids ({@code seatPublicId} is null for a standing ticket). */
+    public static AuctionResponse from(Auction auction, UUID eventPublicId, UUID zonePublicId, UUID seatPublicId) {
+        return new AuctionResponse(auction.getPublicId(), eventPublicId, zonePublicId, seatPublicId,
+                auction.getStartPrice(), auction.getMinIncrement(), auction.getCurrentPrice(), auction.getBidCount(),
+                auction.getStartsAt(), auction.getEndsAt(), auction.getAntiSnipeWindowSec(), auction.getExtensionSec(),
+                auction.getStatus());
+    }
 }

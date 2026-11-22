@@ -1,9 +1,11 @@
 package com.bidtix.config.security;
 
 import com.bidtix.auction.controller.AuctionController;
+import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.service.AuctionService;
 import com.bidtix.booking.controller.AdminTicketController;
 import com.bidtix.booking.service.AdminTicketService;
+import com.bidtix.common.dtos.PageResponse;
 import com.bidtix.config.exceptions.GlobalExceptionHandler;
 import com.bidtix.event.controller.EventController;
 import com.bidtix.event.controller.VenueController;
@@ -170,6 +172,34 @@ class MethodAuthorizationTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
                 .andExpect(jsonPath("$.errors").isNotEmpty());
+    }
+
+    // ---- GET /auctions: any logged-in user ----------------------------------------------------
+
+    @Test
+    void listAuctions_anyLoggedInRole_isAllowed_andPassesTheFilters() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        when(auctionService.listAuctions(any(), any(), eq(1), eq(5)))
+                .thenReturn(new PageResponse<>(List.of(), 1, 5, 0, 0));
+
+        for (String role : List.of("ADMIN", "ORGANIZER", "CUSTOMER")) {
+            mvc.perform(get("/api/v1/auctions?status=LIVE&eventPublicId=" + eventId + "&page=1&size=5")
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + role))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.page").value(1));
+        }
+        verify(auctionService, atLeastOnce()).listAuctions(AuctionStatus.LIVE, eventId, 1, 5);
+    }
+
+    @Test
+    void listAuctions_withoutToken_is401() throws Exception {
+        mvc.perform(get("/api/v1/auctions")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void listAuctions_unknownStatus_is400() throws Exception {
+        mvc.perform(get("/api/v1/auctions?status=NOPE").header(HttpHeaders.AUTHORIZATION, "Bearer CUSTOMER"))
+                .andExpect(status().isBadRequest());
     }
 
     // ---- POST /events/{id}/publish: ORGANIZER only --------------------------------------------
