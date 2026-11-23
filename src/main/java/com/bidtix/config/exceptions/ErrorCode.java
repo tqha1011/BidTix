@@ -28,6 +28,8 @@ public enum ErrorCode {
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "Something went wrong on our side"),
     TOO_MANY_REQUESTS(HttpStatus.TOO_MANY_REQUESTS, "Too many requests, please try again later"),
     RATE_LIMITER_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "The service is temporarily unavailable, please try again later"),
+    IDEMPOTENCY_KEY_REUSED(HttpStatus.UNPROCESSABLE_CONTENT, "This Idempotency-Key was already used for a different request"),
+    IDEMPOTENCY_REQUEST_IN_PROGRESS(HttpStatus.CONFLICT, "A request with this Idempotency-Key is still being processed"),
 
     // --- user / auth ---
     EMAIL_ALREADY_EXISTS(HttpStatus.CONFLICT, "Email is already registered"),

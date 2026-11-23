@@ -30,7 +30,8 @@ public class BidController {
     /**
      * Places a bid for the logged-in customer. 201 when accepted; 400 when the auction is over or not open
      * ({@code BID_NO_LONGER_AVAILABLE}) or the amount is too low ({@code INVALID_MONEY_BID}); 404 for an unknown auction.
-     * TODO(idempotency): needs the {@code Idempotency-Key} header once the idempotency filter exists.
+     * Needs an {@code Idempotency-Key} header (checked by {@code IdempotencyFilter}): a retry with the same key and
+     * body replays this response instead of bidding twice.
      */
     @PostMapping
     @PreAuthorize("hasRole('CUSTOMER')")
