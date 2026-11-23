@@ -48,7 +48,10 @@ public enum ErrorCode {
     EVENT_HAS_NO_ZONES(HttpStatus.CONFLICT, "An event needs at least one zone before it can be published"),
 
     // --- auction ---
-    EVENT_NOT_PUBLISHED(HttpStatus.CONFLICT, "Only a PUBLISHED event can have auctions");
+    AUCTION_NOT_FOUND(HttpStatus.NOT_FOUND, "Auction not found"),
+    EVENT_NOT_PUBLISHED(HttpStatus.CONFLICT, "Only a PUBLISHED event can have auctions"),
+    INVALID_MONEY_BID(HttpStatus.BAD_REQUEST, "Bid amount is too low"),
+    BID_NO_LONGER_AVAILABLE(HttpStatus.BAD_REQUEST, "The bid is no longer available");
 
     private final HttpStatus status;
     private final String message;
