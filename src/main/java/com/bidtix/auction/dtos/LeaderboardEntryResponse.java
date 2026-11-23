@@ -9,4 +9,7 @@ public record LeaderboardEntryResponse(
         /* VND: the bidder's highest bid in this auction */
         long amount
 ) {
+    public static LeaderboardEntryResponse of(int rank, String bidderName, long amount) {
+        return new LeaderboardEntryResponse(rank, bidderName, amount);
+    }
 }

@@ -23,23 +23,24 @@ public interface BidRepository extends CrudRepository<Bid, Long> {
             nativeQuery = true)
     Optional<Bid> findBestBidWithoutOffer(@Param("auctionId") Long auctionId);
 
-    /** One line of an auction's leaderboard: a bidder and their highest bid in it. */
-    record TopBidder(String fullName, Long amount) {
+    /** A bidder (users.id) and their highest bid in one auction. */
+    record TopBid(Long bidderId, Long amount) {
     }
 
     /**
      * The bidders of one auction, highest bid first, each counted once with their highest bid. {@code Pageable} sets how
      * many ({@code PageRequest.of(0, 10)} is the top 10). No two bids of an auction have the same amount
-     * ({@code uq_bids_auction_amount}), so the order never has ties. The users table is joined by id because a bid keeps only
-     * the bidder's id (the modules are not linked by JPA). This reads every bid of the auction, so it is the fallback and the
-     * source to rebuild a cached leaderboard, not something to call on every page view of a busy auction.
+     * ({@code uq_bids_auction_amount}), so the order never has ties. Only ids and amounts come back: names are looked up
+     * separately for the lines that are shown (see {@code UserRepository.findByIdIn}), so a cached leaderboard never
+     * holds personal data. This reads every bid of the auction, so it is the source to rebuild a cached leaderboard and
+     * the fallback when the cache is down, not something to call on every page view of a busy auction.
      */
     @Query("""
-            select u.fullName, max(b.amount)
-              from Bid b join User u on u.id = b.bidderId
+            select b.bidderId, max(b.amount)
+              from Bid b
              where b.auction.publicId = :auctionPublicId
-             group by u.id, u.fullName
+             group by b.bidderId
              order by max(b.amount) desc
             """)
-    List<TopBidder> findTopBidders(@Param("auctionPublicId") UUID auctionPublicId, Pageable pageable);
+    List<TopBid> findTopBids(@Param("auctionPublicId") UUID auctionPublicId, Pageable pageable);
 }

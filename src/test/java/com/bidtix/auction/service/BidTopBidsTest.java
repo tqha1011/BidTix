@@ -2,7 +2,7 @@ package com.bidtix.auction.service;
 
 import com.bidtix.auction.dtos.CreateAuctionRequest;
 import com.bidtix.auction.infrastructure.BidRepository;
-import com.bidtix.auction.infrastructure.BidRepository.TopBidder;
+import com.bidtix.auction.infrastructure.BidRepository.TopBid;
 import com.bidtix.auction.service.AuctionFixtures.Fixture;
 import com.bidtix.event.service.EventService;
 import com.bidtix.event.service.VenueService;
@@ -23,8 +23,8 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** {@code findTopBidders}: one line per bidder with their highest bid, highest first, only for the asked auction. */
-class BidTopBiddersTest extends PostgresIntegrationTest {
+/** {@code findTopBids}: one line per bidder (their id) with their highest bid, highest first, only for the asked auction. */
+class BidTopBidsTest extends PostgresIntegrationTest {
 
     @Autowired BidRepository bids;
     @Autowired AuctionService auctionService;
@@ -50,11 +50,11 @@ class BidTopBiddersTest extends PostgresIntegrationTest {
         bid(auction, cat, 130_000);
         bid(auction, dee, 140_000);
 
-        List<TopBidder> top = bids.findTopBidders(auction, PageRequest.of(0, 3));
+        List<TopBid> top = bids.findTopBids(auction, PageRequest.of(0, 3));
 
-        assertThat(top).containsExactly(new TopBidder("Dee", 140_000L), new TopBidder("Cat", 130_000L),
-                new TopBidder("Ann", 120_000L));
-        assertThat(bids.findTopBidders(auction, PageRequest.of(0, 10))).hasSize(4);
+        assertThat(top).containsExactly(new TopBid(dee.getId(), 140_000L), new TopBid(cat.getId(), 130_000L),
+                new TopBid(ann.getId(), 120_000L));
+        assertThat(bids.findTopBids(auction, PageRequest.of(0, 10))).hasSize(4);
     }
 
     @Test
@@ -62,19 +62,20 @@ class BidTopBiddersTest extends PostgresIntegrationTest {
         Fixture f = AuctionFixtures.create(users, venues, events, zones, jdbc, 10, true);
         UUID mine = create(f, 0);
         UUID other = create(f, 1);
-        bid(mine, bidder("Eve"), 100_000);
+        User eve = bidder("Eve");
+        bid(mine, eve, 100_000);
         bid(other, bidder("Fay"), 900_000);
 
-        List<TopBidder> top = bids.findTopBidders(mine, PageRequest.of(0, 10));
+        List<TopBid> top = bids.findTopBids(mine, PageRequest.of(0, 10));
 
-        assertThat(top).containsExactly(new TopBidder("Eve", 100_000L));
+        assertThat(top).containsExactly(new TopBid(eve.getId(), 100_000L));
     }
 
     @Test
     void anAuctionWithoutBids_hasAnEmptyLeaderboard() {
         Fixture f = AuctionFixtures.create(users, venues, events, zones, jdbc, 10, true);
 
-        assertThat(bids.findTopBidders(create(f, 0), PageRequest.of(0, 10))).isEmpty();
+        assertThat(bids.findTopBids(create(f, 0), PageRequest.of(0, 10))).isEmpty();
     }
 
     private User bidder(String name) {
