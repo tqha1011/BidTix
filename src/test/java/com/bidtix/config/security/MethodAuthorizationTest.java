@@ -1,8 +1,12 @@
 package com.bidtix.config.security;
 
 import com.bidtix.auction.controller.AuctionController;
+import com.bidtix.auction.controller.BidController;
 import com.bidtix.auction.domain.AuctionStatus;
+import com.bidtix.auction.dtos.PlaceBidRequest;
+import com.bidtix.auction.dtos.PlaceBidResponse;
 import com.bidtix.auction.service.AuctionService;
+import com.bidtix.auction.service.BidService;
 import com.bidtix.booking.controller.AdminTicketController;
 import com.bidtix.booking.service.AdminTicketService;
 import com.bidtix.common.dtos.PageResponse;
@@ -71,6 +75,7 @@ class MethodAuthorizationTest {
 
     @Autowired WebApplicationContext context;
     @Autowired AuctionService auctionService;
+    @Autowired BidService bidService;
     @Autowired JwtDecoder jwtDecoder;
     @Autowired EventService eventService;
 
@@ -202,6 +207,46 @@ class MethodAuthorizationTest {
                 .andExpect(status().isBadRequest());
     }
 
+    // ---- POST /auctions/{id}/bids: CUSTOMER only ----------------------------------------------
+
+    @Test
+    void placeBid_customer_isAllowed_andServiceGetsThePathAuctionAmountAndTokenSubject() throws Exception {
+        UUID auctionId = UUID.randomUUID();
+        when(bidService.placeBid(any(), eq(USER_ID)))
+                .thenReturn(PlaceBidResponse.create(USER_ID, auctionId, 150_000L, "Bidder"));
+
+        mvc.perform(json(post("/api/v1/auctions/" + auctionId + "/bids"), "CUSTOMER", "{\"amount\":150000}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.amount").value(150_000));
+
+        verify(bidService).placeBid(PlaceBidRequest.create(auctionId, 150_000L), USER_ID);
+    }
+
+    @Test
+    void placeBid_adminAndOrganizer_areForbidden() throws Exception {
+        for (String role : List.of("ADMIN", "ORGANIZER")) {
+            mvc.perform(json(post("/api/v1/auctions/" + UUID.randomUUID() + "/bids"), role, "{\"amount\":150000}"))
+                    .andExpect(forbidden());
+        }
+    }
+
+    @Test
+    void placeBid_withoutToken_is401() throws Exception {
+        mvc.perform(post("/api/v1/auctions/" + UUID.randomUUID() + "/bids")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"amount\":150000}"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void placeBid_missingOrNonPositiveAmount_is400WithFieldErrors() throws Exception {
+        for (String body : List.of("{}", "{\"amount\":0}", "{\"amount\":-5}")) {
+            mvc.perform(json(post("/api/v1/auctions/" + UUID.randomUUID() + "/bids"), "CUSTOMER", body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                    .andExpect(jsonPath("$.errors").isNotEmpty());
+        }
+    }
+
     // ---- POST /events/{id}/publish: ORGANIZER only --------------------------------------------
 
     @Test
@@ -300,7 +345,7 @@ class MethodAuthorizationTest {
     @EnableWebMvc
     @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class,
             GlobalExceptionHandler.class, VenueController.class, EventController.class,
-            AdminTicketController.class, AuctionController.class})
+            AdminTicketController.class, AuctionController.class, BidController.class})
     static class TestConfig {
         @Bean JwtDecoder jwtDecoder() { return mock(JwtDecoder.class); }
         @Bean VenueService venueService() { return mock(VenueService.class); }
@@ -308,5 +353,6 @@ class MethodAuthorizationTest {
         @Bean ZoneService zoneService() { return mock(ZoneService.class); }
         @Bean AdminTicketService adminTicketService() { return mock(AdminTicketService.class); }
         @Bean AuctionService auctionService() { return mock(AuctionService.class); }
+        @Bean BidService bidService() { return mock(BidService.class); }
     }
 }

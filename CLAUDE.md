@@ -55,7 +55,11 @@ seat-hold or payment flow).
 > only thing that does), and the right to buy passes to the highest bidder who has not had an offer, at their own highest bid and if it reaches
 > the reserve; with nobody left the auction FAILS like above. An order paid at the last moment makes the offer ACCEPTED and the auction SETTLED.
 > The shared steps (open an offer, fail an auction) are in `AuctionSettlementService`.
-> Not started: event cancel and update, the rest of the auction (bids, cancel), real payment provider and webhooks,
+> `POST /api/v1/auctions/{auctionPublicId}/bids` (CUSTOMER, body `{amount}`) places a bid (`BidService.placeBid`): a Java pre-check on the
+> auction row refuses an obviously bad bid, then one conditional `UPDATE` (`AuctionRepository.placeBid`) decides status, end time and minimum
+> price, moves price, leader and bid count, and extends `ends_at` inside the anti-sniping window; its row count is checked. It does not require
+> `Idempotency-Key` yet.
+> Not started: event cancel and update, auction cancel, real payment provider and webhooks,
 > idempotency filter. Rate limits exist for login, register and logged-in callers; the other public routes need
 > `@RateLimited` when they are added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
@@ -172,7 +176,7 @@ auth/      controller, service, infrastructure, dtos, domain   done: register / 
 user/      domain, infrastructure                              entity + repository only, no API yet
 event/     controller, dtos, service, infrastructure, domain   venue / event / zone+seats creation (organizer, admin)
 booking/   domain, dto, service, infrastructure                seated booking flow done; sweeper, GA, controller planned
-auction/   controller, dtos, service, infrastructure, domain    create + activation + closing + offer expiry done; bids planned
+auction/   controller, dtos, service, infrastructure, domain    create + activation + closing + offer expiry + bids done
 payment/   domain, service, infrastructure                     PaymentGateway + mock; webhook inbox entity (real provider planned)
 common/    domain (BaseEntity), utils, idempotency             shared by every module
 config/    security, exceptions, ClockConfig                   cross-cutting Spring setup, see below
