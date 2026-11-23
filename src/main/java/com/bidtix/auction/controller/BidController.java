@@ -5,6 +5,8 @@ import com.bidtix.auction.dtos.PlaceBidRequest;
 import com.bidtix.auction.dtos.PlaceBidResponse;
 import com.bidtix.auction.service.BidService;
 import com.bidtix.config.security.CurrentUser;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -35,6 +37,10 @@ public class BidController {
      */
     @PostMapping
     @PreAuthorize("hasRole('CUSTOMER')")
+    // read by IdempotencyFilter, not by this method; declared here so Swagger UI shows the header
+    @Parameter(name = "Idempotency-Key", in = ParameterIn.HEADER, required = true,
+            description = "Client-made unique key (1 to 64 characters, e.g. a UUID). Retry with the same key and body to get the "
+                    + "first response back instead of bidding twice.")
     public ResponseEntity<PlaceBidResponse> placeBid(@PathVariable UUID auctionPublicId,
                                                      @Valid @RequestBody BidAmountRequest request,
                                                      Principal principal) {
