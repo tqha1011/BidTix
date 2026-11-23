@@ -37,7 +37,8 @@ seat-hold or payment flow).
 > Status: schema (Flyway V1–V14), JPA entities, the `auth` module, global error handling, Testcontainers
 > and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats, mock payment, issue
 > tickets) are done, and so is the flow for **GENERAL_ADMISSION zones** (counter decrement). The booking
-> flow is service-only: there is no controller or endpoint for it yet.
+> flow is exposed by `POST /api/v1/orders` (CUSTOMER, `OrderController`, 201 with the order; status PENDING_PAYMENT when the payment failed).
+> It needs an `Idempotency-Key` header (see **Idempotency**).
 > Role-protected management endpoints exist (`@PreAuthorize`, roles come from the JWT `roles` claim):
 > `POST /venues` (ADMIN), `POST /events`, `POST /events/{id}/zones` (ORGANIZER; the zone call creates a
 > SEATED zone's seats in bulk) and `POST /events/{id}/publish` (ORGANIZER, owner only, DRAFT to PUBLISHED, needs a
@@ -57,10 +58,9 @@ seat-hold or payment flow).
 > The shared steps (open an offer, fail an auction) are in `AuctionSettlementService`.
 > `POST /api/v1/auctions/{auctionPublicId}/bids` (CUSTOMER, body `{amount}`) places a bid (`BidService.placeBid`): a Java pre-check on the
 > auction row refuses an obviously bad bid, then one conditional `UPDATE` (`AuctionRepository.placeBid`) decides status, end time and minimum
-> price, moves price, leader and bid count, and extends `ends_at` inside the anti-sniping window; its row count is checked. It does not require
-> `Idempotency-Key` yet.
-> Not started: event cancel and update, auction cancel, real payment provider and webhooks,
-> idempotency filter. Rate limits exist for login, register and logged-in callers; the other public routes need
+> price, moves price, leader and bid count, and extends `ends_at` inside the anti-sniping window; its row count is checked. It needs an
+> `Idempotency-Key` header (see **Idempotency**).
+> Not started: event cancel and update, auction cancel, real payment provider and webhooks. Rate limits exist for login, register and logged-in callers; the other public routes need
 > `@RateLimited` when they are added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
 
@@ -106,7 +106,7 @@ clears the cookie. The database stores only the SHA-256 hash of a refresh token.
 used token revokes all of that user's sessions (theft response); two parallel refreshes with the same
 token cannot both win (conditional `UPDATE ... WHERE revoked_at IS NULL`).
 
-**Booking flow** (`BookingService.bookTicket`, SEATED and GENERAL_ADMISSION zones, no HTTP endpoint yet).
+**Booking flow** (`BookingService.bookTicket`, SEATED and GENERAL_ADMISSION zones, `POST /api/v1/orders`).
 Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) (seats),
 [ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md) (payment boundary) and
 [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). The Redis refusal gate in front of it: [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md). At most
@@ -175,7 +175,7 @@ Package-by-feature under `com.bidtix`:
 auth/      controller, service, infrastructure, dtos, domain   done: register / login / refresh / logout
 user/      domain, infrastructure                              entity + repository only, no API yet
 event/     controller, dtos, service, infrastructure, domain   venue / event / zone+seats creation (organizer, admin)
-booking/   domain, dto, service, infrastructure                seated booking flow done; sweeper, GA, controller planned
+booking/   controller, domain, dto, service, infrastructure     booking flow (seated + GA), POST /orders, sweeper done
 auction/   controller, dtos, service, infrastructure, domain    create + activation + closing + offer expiry + bids done
 payment/   domain, service, infrastructure                     PaymentGateway + mock; webhook inbox entity (real provider planned)
 common/    domain (BaseEntity), utils, idempotency             shared by every module
@@ -244,6 +244,14 @@ ticket list (auth uses `dtos/`). New code follows the layer list above; move `dt
   `Idempotency-Key` header (stored in `idempotency_keys`; same key + different body returns 422,
   in-flight duplicate returns 409, completed duplicate replays the stored response).
 - Payment webhooks are deduplicated by `(provider, provider_event_id)` in `payment_webhook_events`.
+- `IdempotencyFilter` (`common/idempotency`) enforces it. It runs after the Spring Security chain (keys belong to a user) and
+  only on the POST routes listed in `bidtix.idempotency.paths` (today `/api/v1/auctions/*/bids` and `/api/v1/orders`; add the
+  payment route when it exists). It claims the key with `INSERT ... ON CONFLICT DO NOTHING` (committed before the request runs), runs the
+  request and stores the response **only for a 2xx**; a failure deletes the key so a retry runs again. Missing or too long header:
+  400; same key, other body: 422 `IDEMPOTENCY_KEY_REUSED`; duplicate still running: 409 `IDEMPOTENCY_REQUEST_IN_PROGRESS`; a replay
+  carries `Idempotent-Replayed: true`. A key stuck `PROCESSING` for `processing-timeout` is taken as abandoned. The claim and the
+  stored response are NOT in the business transaction, so a crash between the business commit and storing the response lets the
+  same request run once more after the timeout: a flow whose repeat is harmful needs its own guard in the business transaction.
 
 **Caching**
 - Cache-aside with explicit TTLs; evict on write. Cached availability is a hint for reads only; every

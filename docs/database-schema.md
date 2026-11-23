@@ -99,7 +99,13 @@ users ──< idempotency_keys
   - a `PROCESSING` row returns `409`,
   - a different `request_hash` returns `422`.
 
-  The response is written in the same transaction as the business change.
+  `IdempotencyFilter` (`common/idempotency`, runs after Spring Security) does this for the routes in
+  `bidtix.idempotency.paths`. The key is claimed with `INSERT ... ON CONFLICT DO NOTHING` before the request runs, and
+  the response is stored after it, only for a 2xx; any other outcome deletes the key so a retry runs again. These are
+  separate transactions from the business change: if the server dies between the business commit and storing the
+  response, the key stays `PROCESSING` and, after `processing-timeout`, the same request runs once more. A flow whose
+  repeat is harmful needs its own guard in the business transaction (for a bid: `UNIQUE (auction_id, amount)` and the
+  price rule).
 
 ## Concurrency strategy
 

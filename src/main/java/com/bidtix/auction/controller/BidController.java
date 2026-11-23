@@ -5,6 +5,8 @@ import com.bidtix.auction.dtos.PlaceBidRequest;
 import com.bidtix.auction.dtos.PlaceBidResponse;
 import com.bidtix.auction.service.BidService;
 import com.bidtix.config.security.CurrentUser;
+import io.swagger.v3.oas.annotations.Parameter;
+import io.swagger.v3.oas.annotations.enums.ParameterIn;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -30,10 +32,15 @@ public class BidController {
     /**
      * Places a bid for the logged-in customer. 201 when accepted; 400 when the auction is over or not open
      * ({@code BID_NO_LONGER_AVAILABLE}) or the amount is too low ({@code INVALID_MONEY_BID}); 404 for an unknown auction.
-     * TODO(idempotency): needs the {@code Idempotency-Key} header once the idempotency filter exists.
+     * Needs an {@code Idempotency-Key} header (checked by {@code IdempotencyFilter}): a retry with the same key and
+     * body replays this response instead of bidding twice.
      */
     @PostMapping
     @PreAuthorize("hasRole('CUSTOMER')")
+    // read by IdempotencyFilter, not by this method; declared here so Swagger UI shows the header
+    @Parameter(name = "Idempotency-Key", in = ParameterIn.HEADER, required = true,
+            description = "Client-made unique key (1 to 64 characters, e.g. a UUID). Retry with the same key and body to get the "
+                    + "first response back instead of bidding twice.")
     public ResponseEntity<PlaceBidResponse> placeBid(@PathVariable UUID auctionPublicId,
                                                      @Valid @RequestBody BidAmountRequest request,
                                                      Principal principal) {

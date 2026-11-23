@@ -2,6 +2,7 @@ package com.bidtix.auction.infrastructure;
 
 import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionStatus;
+import com.bidtix.auction.dtos.LeaderboardEntryResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

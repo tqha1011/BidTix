@@ -10,3 +10,5 @@ public record AuctionProperties(
         /* seconds added by such a bid, unless the organizer chose another value */
         @DefaultValue("60") int extensionSec) {
 }
+
+

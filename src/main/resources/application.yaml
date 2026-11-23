@@ -45,6 +45,17 @@ bidtix:
       # BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false; keep true everywhere else.
       secure: true
 
+  # Idempotency-Key (see common/idempotency): a retried POST with the same key and body runs once and then replays the
+  # stored response. `paths` are the POST routes that REQUIRE the header. Keys are kept for `ttl`; a key left
+  # PROCESSING for longer than `processing-timeout` (the server died mid-request) can be used again.
+  idempotency:
+    enabled: true
+    ttl: 24h
+    processing-timeout: 2m
+    paths:
+      - /api/v1/auctions/*/bids
+      - /api/v1/orders
+
   # Rate limit (see config/ratelimit). A policy is one of two algorithms, chosen with `algorithm`:
   #   fixed-window (default): at most `limit` requests per `window`, counted from the first request.
   #   token-bucket: a bucket of `capacity` tokens, one per request, `refill-tokens` added every `refill-every`
