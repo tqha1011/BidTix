@@ -38,7 +38,7 @@ seat-hold or payment flow).
 > and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats, mock payment, issue
 > tickets) are done, and so is the flow for **GENERAL_ADMISSION zones** (counter decrement). The booking
 > flow is exposed by `POST /api/v1/orders` (CUSTOMER, `OrderController`, 201 with the order; status PENDING_PAYMENT when the payment failed).
-> It is not in `bidtix.idempotency.paths` yet, so it does not require `Idempotency-Key` yet.
+> It needs an `Idempotency-Key` header (see **Idempotency**).
 > Role-protected management endpoints exist (`@PreAuthorize`, roles come from the JWT `roles` claim):
 > `POST /venues` (ADMIN), `POST /events`, `POST /events/{id}/zones` (ORGANIZER; the zone call creates a
 > SEATED zone's seats in bulk) and `POST /events/{id}/publish` (ORGANIZER, owner only, DRAFT to PUBLISHED, needs a
@@ -245,8 +245,8 @@ ticket list (auth uses `dtos/`). New code follows the layer list above; move `dt
   in-flight duplicate returns 409, completed duplicate replays the stored response).
 - Payment webhooks are deduplicated by `(provider, provider_event_id)` in `payment_webhook_events`.
 - `IdempotencyFilter` (`common/idempotency`) enforces it. It runs after the Spring Security chain (keys belong to a user) and
-  only on the POST routes listed in `bidtix.idempotency.paths` (today `/api/v1/auctions/*/bids`; add the order and payment routes
-  when they exist). It claims the key with `INSERT ... ON CONFLICT DO NOTHING` (committed before the request runs), runs the
+  only on the POST routes listed in `bidtix.idempotency.paths` (today `/api/v1/auctions/*/bids` and `/api/v1/orders`; add the
+  payment route when it exists). It claims the key with `INSERT ... ON CONFLICT DO NOTHING` (committed before the request runs), runs the
   request and stores the response **only for a 2xx**; a failure deletes the key so a retry runs again. Missing or too long header:
   400; same key, other body: 422 `IDEMPOTENCY_KEY_REUSED`; duplicate still running: 409 `IDEMPOTENCY_REQUEST_IN_PROGRESS`; a replay
   carries `Idempotent-Replayed: true`. A key stuck `PROCESSING` for `processing-timeout` is taken as abandoned. The claim and the

@@ -54,6 +54,7 @@ bidtix:
     processing-timeout: 2m
     paths:
       - /api/v1/auctions/*/bids
+      - /api/v1/orders
 
   # Rate limit (see config/ratelimit). A policy is one of two algorithms, chosen with `algorithm`:
   #   fixed-window (default): at most `limit` requests per `window`, counted from the first request.
