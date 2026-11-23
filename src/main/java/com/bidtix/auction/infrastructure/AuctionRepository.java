@@ -2,16 +2,26 @@ package com.bidtix.auction.infrastructure;
 
 import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface AuctionRepository extends JpaRepository<Auction, Long> {
+
+    /** A page of auctions in any of these statuses. A plain read, no lock. */
+    Page<Auction> findByStatusIn(Collection<AuctionStatus> statuses, Pageable pageable);
+
+    /** Same, for one event (internal id). */
+    Page<Auction> findByEventIdAndStatusIn(Long eventId, Collection<AuctionStatus> statuses, Pageable pageable);
 
     /**
      * Opens up to {@code limit} auctions whose start time has come (SCHEDULED -&gt; LIVE), lowest id first, and returns how
@@ -57,4 +67,39 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
             "where a.id = :auctionId and a.status = :expected")
     int updateAuctionStatus(@Param("auctionId") Long auctionId, @Param("expected") AuctionStatus expected,
                             @Param("next") AuctionStatus next, @Param("now") Instant now);
+
+
+
+    Optional<Auction> findByPublicId(UUID publicId);
+
+    /**
+     * Takes a bid in ONE statement: the auction must be LIVE and not over, and {@code amount} must reach the start price
+     * (first bid) or the current price plus the minimum increment. The price, the leader and the bid count change together,
+     * and the end time moves forward by {@code extension_sec} when the bid lands inside the anti-sniping window (the last
+     * {@code anti_snipe_window_sec} seconds). The statement locks the row, so a second bid waits and then re-checks the
+     * conditions against the new price: it can lose, it can never overwrite.
+     * <p>
+     * The caller MUST check the row count: 0 means the bid was refused (over, not LIVE, or too low). The persistence
+     * context is cleared because this bypasses it.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            update auctions
+               set current_price     = :amount,
+                   leading_bidder_id = :bidderId,
+                   bid_count         = bid_count + 1,
+                   ends_at           = case
+                                         when ends_at - interval '1 second' * anti_snipe_window_sec <= :now
+                                         then ends_at + interval '1 second' * extension_sec
+                                         else ends_at
+                                       end,
+                   version           = version + 1,
+                   updated_at        = :now
+             where id = :auctionId
+               and status = 'LIVE'
+               and ends_at > :now
+               and :amount >= coalesce(current_price + min_increment, start_price)
+            """, nativeQuery = true)
+    int placeBid(@Param("auctionId") Long auctionId, @Param("bidderId") Long bidderId,
+                 @Param("amount") long amount, @Param("now") Instant now);
 }

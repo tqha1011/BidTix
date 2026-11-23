@@ -1,10 +1,12 @@
 package com.bidtix.auction.service;
 
 import com.bidtix.auction.domain.Auction;
+import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.dtos.AuctionResponse;
 import com.bidtix.auction.dtos.CreateAuctionRequest;
 import com.bidtix.auction.infrastructure.AuctionProperties;
 import com.bidtix.auction.infrastructure.AuctionRepository;
+import com.bidtix.common.dtos.PageResponse;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.event.domain.Event;
@@ -20,19 +22,27 @@ import com.bidtix.user.infrastructure.UserRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AuctionService {
 
+    private static final List<AuctionStatus> OPEN_STATUSES = List.of(AuctionStatus.SCHEDULED, AuctionStatus.LIVE);
+    private static final int MAX_PAGE_SIZE = 100;
     private static final String ACTIVE_SEAT_INDEX = "ux_auctions_active_seat";
 
     private final AuctionRepository auctionRepository;
@@ -105,10 +115,40 @@ public class AuctionService {
             throw new BusinessException(ErrorCode.ZONE_SOLD_OUT, "No ticket left in this zone to auction");
         }
 
-        return new AuctionResponse(auction.getPublicId(), event.getPublicId(), zone.getPublicId(),
-                seat == null ? null : seat.getPublicId(), auction.getStartPrice(), auction.getMinIncrement(),
-                auction.getCurrentPrice(), auction.getBidCount(), auction.getStartsAt(), auction.getEndsAt(),
-                auction.getAntiSnipeWindowSec(), auction.getExtensionSec(), auction.getStatus());
+        return AuctionResponse.from(auction, event.getPublicId(), zone.getPublicId(), seat == null ? null : seat.getPublicId());
+    }
+
+    /**
+     * A page of auctions, soonest ending first. {@code status} null means the open ones (SCHEDULED and LIVE);
+     * {@code eventPublicId} null means every event. The event, zone and seat public ids are resolved with one query
+     * each for the whole page, not one per row.
+     */
+    @Transactional(readOnly = true)
+    public PageResponse<AuctionResponse> listAuctions(AuctionStatus status, UUID eventPublicId, int page, int size) {
+        List<AuctionStatus> statuses = status == null ? OPEN_STATUSES : List.of(status);
+        // id is the tie-breaker, so two auctions that end together never swap between pages
+        var pageable = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE), Sort.by("endsAt", "id"));
+        Page<Auction> auctions;
+        if (eventPublicId == null) {
+            auctions = auctionRepository.findByStatusIn(statuses, pageable);
+        } else {
+            Event event = eventRepository.findByPublicId(eventPublicId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
+            auctions = auctionRepository.findByEventIdAndStatusIn(event.getId(), statuses, pageable);
+        }
+
+        Map<Long, UUID> eventIds = new HashMap<>();
+        eventRepository.findAllById(auctions.map(Auction::getEventId).toSet())
+                .forEach(e -> eventIds.put(e.getId(), e.getPublicId()));
+        Map<Long, UUID> zoneIds = new HashMap<>();
+        zoneRepository.findAllById(auctions.map(Auction::getZoneId).toSet())
+                .forEach(z -> zoneIds.put(z.getId(), z.getPublicId()));
+        Map<Long, UUID> seatIds = new HashMap<>();
+        seatRepository.findAllById(auctions.stream().map(Auction::getSeatId).filter(Objects::nonNull).collect(Collectors.toSet()))
+                .forEach(s -> seatIds.put(s.getId(), s.getPublicId()));
+
+        return PageResponse.from(auctions.map(a -> AuctionResponse.from(a, eventIds.get(a.getEventId()),
+                zoneIds.get(a.getZoneId()), a.getSeatId() == null ? null : seatIds.get(a.getSeatId()))));
     }
 
     /** SEATED zones need a seat of that zone; GENERAL_ADMISSION zones take none. Returns the seat, or null for a standing ticket. */
