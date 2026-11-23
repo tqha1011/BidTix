@@ -8,6 +8,12 @@ import com.bidtix.auction.dtos.PlaceBidResponse;
 import com.bidtix.auction.service.AuctionService;
 import com.bidtix.auction.service.BidService;
 import com.bidtix.booking.controller.AdminTicketController;
+import com.bidtix.booking.controller.OrderController;
+import com.bidtix.booking.dtos.BookingTicketQuantityResult;
+import com.bidtix.booking.dtos.BookingTicketRequest;
+import com.bidtix.booking.service.BookingService;
+import com.bidtix.booking.domain.OrderStatus;
+import com.bidtix.event.domain.ZoneType;
 import com.bidtix.booking.service.AdminTicketService;
 import com.bidtix.common.dtos.PageResponse;
 import com.bidtix.config.exceptions.GlobalExceptionHandler;
@@ -68,6 +74,8 @@ class MethodAuthorizationTest {
     private static final String ZONE_BODY =
             "{\"name\":\"GA\",\"zoneType\":\"GENERAL_ADMISSION\",\"price\":500000,\"capacity\":100}";
 
+    private static final String ORDER_BODY = "{\"eventPublicId\":\"%s\",\"zonePublicId\":\"%s\",\"quantity\":2}";
+
     private static final String AUCTION_BODY = """
             {"eventPublicId":"%s","zonePublicId":"%s","startPrice":100000,"minIncrement":10000,
              "startsAt":"2030-05-01T00:00:00Z","endsAt":"2030-05-02T00:00:00Z"}
@@ -76,6 +84,7 @@ class MethodAuthorizationTest {
     @Autowired WebApplicationContext context;
     @Autowired AuctionService auctionService;
     @Autowired BidService bidService;
+    @Autowired BookingService bookingService;
     @Autowired JwtDecoder jwtDecoder;
     @Autowired EventService eventService;
 
@@ -247,6 +256,47 @@ class MethodAuthorizationTest {
         }
     }
 
+    // ---- POST /orders: CUSTOMER only ----------------------------------------------------------
+
+    @Test
+    void bookTicket_customer_isAllowed_andServiceGetsTheRequestAndTokenSubject() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        UUID zoneId = UUID.randomUUID();
+        when(bookingService.bookTicket(any(), eq(USER_ID))).thenReturn(new BookingTicketQuantityResult(
+                "ORD-1", OrderStatus.PAID, 600_000L, "VND", Instant.now(), Instant.now(), "Buyer", "Concert", "Hanoi",
+                Instant.now(), Instant.now(), ZoneType.GENERAL_ADMISSION, 2, List.of()));
+
+        mvc.perform(json(post("/api/v1/orders"), "CUSTOMER", ORDER_BODY.formatted(eventId, zoneId)))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.orderCode").value("ORD-1"))
+                .andExpect(jsonPath("$.status").value("PAID"));
+
+        verify(bookingService).bookTicket(new BookingTicketRequest(eventId, zoneId, null, 2), USER_ID);
+    }
+
+    @Test
+    void bookTicket_adminAndOrganizer_areForbidden() throws Exception {
+        for (String role : List.of("ADMIN", "ORGANIZER")) {
+            mvc.perform(json(post("/api/v1/orders"), role, ORDER_BODY.formatted(UUID.randomUUID(), UUID.randomUUID())))
+                    .andExpect(forbidden());
+        }
+    }
+
+    @Test
+    void bookTicket_withoutToken_is401() throws Exception {
+        mvc.perform(post("/api/v1/orders").contentType(MediaType.APPLICATION_JSON)
+                        .content(ORDER_BODY.formatted(UUID.randomUUID(), UUID.randomUUID())))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void bookTicket_missingEventOrZone_is400WithFieldErrors() throws Exception {
+        mvc.perform(json(post("/api/v1/orders"), "CUSTOMER", "{\"quantity\":2}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.errors").isNotEmpty());
+    }
+
     // ---- POST /events/{id}/publish: ORGANIZER only --------------------------------------------
 
     @Test
@@ -345,7 +395,7 @@ class MethodAuthorizationTest {
     @EnableWebMvc
     @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class,
             GlobalExceptionHandler.class, VenueController.class, EventController.class,
-            AdminTicketController.class, AuctionController.class, BidController.class})
+            AdminTicketController.class, AuctionController.class, BidController.class, OrderController.class})
     static class TestConfig {
         @Bean JwtDecoder jwtDecoder() { return mock(JwtDecoder.class); }
         @Bean VenueService venueService() { return mock(VenueService.class); }
@@ -354,5 +404,6 @@ class MethodAuthorizationTest {
         @Bean AdminTicketService adminTicketService() { return mock(AdminTicketService.class); }
         @Bean AuctionService auctionService() { return mock(AuctionService.class); }
         @Bean BidService bidService() { return mock(BidService.class); }
+        @Bean BookingService bookingService() { return mock(BookingService.class); }
     }
 }

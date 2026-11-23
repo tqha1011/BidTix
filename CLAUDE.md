@@ -37,7 +37,8 @@ seat-hold or payment flow).
 > Status: schema (Flyway V1–V14), JPA entities, the `auth` module, global error handling, Testcontainers
 > and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats, mock payment, issue
 > tickets) are done, and so is the flow for **GENERAL_ADMISSION zones** (counter decrement). The booking
-> flow is service-only: there is no controller or endpoint for it yet.
+> flow is exposed by `POST /api/v1/orders` (CUSTOMER, `OrderController`, 201 with the order; status PENDING_PAYMENT when the payment failed).
+> It is not in `bidtix.idempotency.paths` yet, so it does not require `Idempotency-Key` yet.
 > Role-protected management endpoints exist (`@PreAuthorize`, roles come from the JWT `roles` claim):
 > `POST /venues` (ADMIN), `POST /events`, `POST /events/{id}/zones` (ORGANIZER; the zone call creates a
 > SEATED zone's seats in bulk) and `POST /events/{id}/publish` (ORGANIZER, owner only, DRAFT to PUBLISHED, needs a
@@ -105,7 +106,7 @@ clears the cookie. The database stores only the SHA-256 hash of a refresh token.
 used token revokes all of that user's sessions (theft response); two parallel refreshes with the same
 token cannot both win (conditional `UPDATE ... WHERE revoked_at IS NULL`).
 
-**Booking flow** (`BookingService.bookTicket`, SEATED and GENERAL_ADMISSION zones, no HTTP endpoint yet).
+**Booking flow** (`BookingService.bookTicket`, SEATED and GENERAL_ADMISSION zones, `POST /api/v1/orders`).
 Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) (seats),
 [ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md) (payment boundary) and
 [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). The Redis refusal gate in front of it: [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md). At most
@@ -174,7 +175,7 @@ Package-by-feature under `com.bidtix`:
 auth/      controller, service, infrastructure, dtos, domain   done: register / login / refresh / logout
 user/      domain, infrastructure                              entity + repository only, no API yet
 event/     controller, dtos, service, infrastructure, domain   venue / event / zone+seats creation (organizer, admin)
-booking/   domain, dto, service, infrastructure                seated booking flow done; sweeper, GA, controller planned
+booking/   controller, domain, dto, service, infrastructure     booking flow (seated + GA), POST /orders, sweeper done
 auction/   controller, dtos, service, infrastructure, domain    create + activation + closing + offer expiry + bids done
 payment/   domain, service, infrastructure                     PaymentGateway + mock; webhook inbox entity (real provider planned)
 common/    domain (BaseEntity), utils, idempotency             shared by every module
