@@ -10,6 +10,8 @@ import com.bidtix.booking.service.GeneralAdmissionFixtures.Fixture;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.event.domain.ZoneType;
+import com.bidtix.payment.service.PayableOrders;
+import com.bidtix.support.OrderPayments;
 import com.bidtix.support.PostgresIntegrationTest;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
@@ -31,21 +33,25 @@ class GeneralAdmissionBookingTest extends PostgresIntegrationTest {
     @Autowired EntityManager em;
     @Autowired TransactionTemplate tx;
     @Autowired JdbcTemplate jdbc;
+    @Autowired PayableOrders payableOrders;
 
     @Test
-    void booking_takesTheQuantity_chargesPerUnit_andIssuesOneTicketPerUnit() {
+    void booking_takesTheQuantity_andPaymentIssuesOneTicketPerUnit() {
         Fixture f = fixture(10, 1);
 
         BaseBookingTicketResult result = book(f, f.userIds().get(0), 3);
 
         assertThat(result).isInstanceOf(BookingTicketQuantityResult.class);
-        assertThat(result.status()).isEqualTo(OrderStatus.PAID);
+        assertThat(result.status()).as("booking only reserves").isEqualTo(OrderStatus.PENDING_PAYMENT);
         assertThat(result.zoneType()).isEqualTo(ZoneType.GENERAL_ADMISSION);
         assertThat(result.totalAmount()).isEqualTo(3 * f.price());
-        assertThat(result.tickets()).hasSize(3);
+        assertThat(result.tickets()).isEmpty();
         assertThat(((BookingTicketQuantityResult) result).quantity()).isEqualTo(3);
-
         assertThat(available(f)).as("available_quantity").isEqualTo(7);
+        assertThat(count("select count(*) from tickets where zone_id = ?", f.zoneDbId())).as("no tickets before payment").isZero();
+
+        OrderPayments.pay(payableOrders, jdbc, result.orderCode());
+
         assertThat(count("select count(*) from tickets where zone_id = ? and seat_id is null", f.zoneDbId())).isEqualTo(3);
         assertThat(count("select count(distinct order_item_id) from tickets where zone_id = ?", f.zoneDbId()))
                 .as("all tickets point at one order item").isEqualTo(1);
@@ -64,8 +70,8 @@ class GeneralAdmissionBookingTest extends PostgresIntegrationTest {
     @Test
     void exactlyTheRemainingStockCanBeBought_thenTheZoneIsSoldOut_andLeavesNoOrderBehind() {
         Fixture f = fixture(5, 3);
-        book(f, f.userIds().get(0), 3);
-        book(f, f.userIds().get(1), 2);
+        pay(book(f, f.userIds().get(0), 3));
+        pay(book(f, f.userIds().get(1), 2));
         assertThat(available(f)).isZero();
         int ordersBefore = orders(f);
 
@@ -113,7 +119,9 @@ class GeneralAdmissionBookingTest extends PostgresIntegrationTest {
     void fiveTicketsAreAllowed() {
         Fixture f = fixture(10, 1);
 
-        assertThat(book(f, f.userIds().get(0), 5).tickets()).hasSize(5);
+        pay(book(f, f.userIds().get(0), 5));
+
+        assertThat(count("select count(*) from tickets where zone_id = ?", f.zoneDbId())).isEqualTo(5);
         assertThat(available(f)).isEqualTo(5);
     }
 
@@ -132,6 +140,11 @@ class GeneralAdmissionBookingTest extends PostgresIntegrationTest {
 
     private Fixture fixture(int capacity, int users) {
         return GeneralAdmissionFixtures.create(em, tx, capacity, users);
+    }
+
+    /** Pays a booked order, the way the payment module will. */
+    private void pay(BaseBookingTicketResult booked) {
+        OrderPayments.pay(payableOrders, jdbc, booked.orderCode());
     }
 
     private BaseBookingTicketResult book(Fixture f, UUID user, int quantity) {

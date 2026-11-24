@@ -7,14 +7,11 @@ import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.payment.service.PayableOrders;
 import com.bidtix.payment.service.PayableOrders.Applied;
 import com.bidtix.payment.service.PayableOrders.PayableOrder;
-import com.bidtix.payment.service.PaymentGateway;
 import com.bidtix.support.PostgresIntegrationTest;
 import jakarta.persistence.EntityManager;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -29,13 +26,10 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
 
 /**
- * {@code OrderPayment}, the booking side of {@code PayableOrders}. A failing payment gateway leaves a booking order
- * PENDING_PAYMENT with its stock taken, which is the order a provider's confirmation arrives for.
+ * {@code OrderPayment}, the booking side of {@code PayableOrders}. Booking an order leaves it PENDING_PAYMENT with its stock
+ * taken, which is the order a provider's confirmation arrives for.
  */
 class OrderPaymentTest extends PostgresIntegrationTest {
 
@@ -44,12 +38,6 @@ class OrderPaymentTest extends PostgresIntegrationTest {
     @Autowired EntityManager em;
     @Autowired TransactionTemplate tx;
     @Autowired JdbcTemplate jdbc;
-    @MockitoBean PaymentGateway paymentGateway;
-
-    @BeforeEach
-    void chargeFails() {
-        when(paymentGateway.charge(anyString(), anyLong())).thenReturn(false);
-    }
 
     // ---- looking an order up -------------------------------------------------------------------
 

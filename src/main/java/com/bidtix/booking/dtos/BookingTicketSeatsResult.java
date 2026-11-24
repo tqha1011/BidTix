@@ -26,10 +26,4 @@ public record BookingTicketSeatsResult(
 
     public record TicketSeatsInfo(UUID ticketPublicId, String rowLabel, Integer seatNumber) implements TicketRef {
     }
-
-    /** Same booking after payment: new status, paid time and the issued tickets. */
-    public BookingTicketSeatsResult withPayment(OrderStatus newStatus, Instant newPaidAt, List<TicketSeatsInfo> newTickets) {
-        return new BookingTicketSeatsResult(orderCode, newStatus, totalAmount, currency, expiresAt, newPaidAt,
-                username, eventName, address, startsAt, endsAt, zoneType, newTickets);
-    }
 }

@@ -39,7 +39,7 @@ class BookingGateRedisDownTest extends PostgresIntegrationTest {
         // standing: a purchase goes through...
         assertThat(bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), f.userIds().get(0)).status())
-                .isEqualTo(OrderStatus.PAID);
+                .isEqualTo(OrderStatus.PENDING_PAYMENT);
         // ...and the sold-out answer comes from the database (it carries the hint), without the failed flag write breaking it
         assertThatThrownBy(() -> bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), f.userIds().get(1)))
@@ -52,7 +52,7 @@ class BookingGateRedisDownTest extends PostgresIntegrationTest {
         var seat = f.seatedSeatIds().get(0);
         assertThat(bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), f.userIds().get(0)).status())
-                .isEqualTo(OrderStatus.PAID);
+                .isEqualTo(OrderStatus.PENDING_PAYMENT);
         assertThatThrownBy(() -> bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), f.userIds().get(1)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->

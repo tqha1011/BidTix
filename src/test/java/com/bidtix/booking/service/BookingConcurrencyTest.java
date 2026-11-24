@@ -9,6 +9,8 @@ import com.bidtix.event.domain.Seat;
 import com.bidtix.event.domain.TicketZone;
 import com.bidtix.event.domain.Venue;
 import com.bidtix.event.domain.ZoneType;
+import com.bidtix.payment.service.PayableOrders;
+import com.bidtix.support.OrderPayments;
 import com.bidtix.support.PostgresIntegrationTest;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.domain.UserRole;
@@ -36,7 +38,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * Fires many parallel bookings at a real PostgreSQL and checks the invariants that must hold no matter
- * how the requests interleave: a seat is sold at most once, and the database agrees with the responses.
+ * how the requests interleave: a seat is held by at most one order, and so sold at most once once the orders are
+ * paid (booking only holds; paying is what sells the seats and issues the tickets).
  */
 class BookingConcurrencyTest extends PostgresIntegrationTest {
 
@@ -44,6 +47,7 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
     @Autowired EntityManager em;
     @Autowired TransactionTemplate tx;
     @Autowired JdbcTemplate jdbc;
+    @Autowired PayableOrders payableOrders;
 
     /** One event with a single SEATED zone, its seats and a pool of customers. */
     private record Fixture(UUID eventId, UUID zoneId, long zoneDbId, List<UUID> seatIds, List<UUID> userIds) {
@@ -66,7 +70,12 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
         assertThat(wins).as("number of successful bookings").hasSize(1);
         assertOnlySeatUnavailableFailures(attempts);
 
-        assertThat(wins.get(0).result().tickets()).hasSize(1);
+        assertThat(wins.get(0).result().tickets()).as("booking issues no ticket").isEmpty();
+        assertThat(seatsWithStatus(f, "HELD")).as("the winner holds the seat").isEqualTo(1);
+        assertThat(ticketsInZone(f)).as("no tickets before payment").isZero();
+
+        payAll(wins);
+
         assertThat(ticketsInZone(f)).as("tickets in the DB").isEqualTo(1);
         assertThat(seatsWithStatus(f, "SOLD")).isEqualTo(1);
         assertThat(ordersOfUsers(f)).as("losers must leave no order behind").isEqualTo(1);
@@ -93,10 +102,13 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
         assertOnlySeatUnavailableFailures(attempts);
 
         List<Attempt> wins = successes(attempts);
-        int ticketsInResponses = wins.stream().mapToInt(a -> a.result().tickets().size()).sum();
+        int ticketsInResponses = seatsWithStatus(f, "HELD");   // each seat held is one ticket once its order is paid
 
         assertThat(wins).as("at least one booking must succeed").isNotEmpty();
-        assertThat(ticketsInResponses).as("tickets promised to clients").isLessThanOrEqualTo(seatCount);
+        assertThat(ticketsInResponses).as("seats held by the winning orders").isLessThanOrEqualTo(seatCount);
+
+        payAll(wins);
+
         assertThat(ticketsInZone(f)).as("tickets in the DB").isEqualTo(ticketsInResponses);
         assertThat(seatsWithStatus(f, "SOLD")).as("seats marked SOLD").isEqualTo(ticketsInResponses);
         assertThat(seatsWithStatus(f, "HELD")).as("no seat may stay HELD").isZero();
@@ -105,6 +117,11 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
     }
 
     // ---- helpers ---------------------------------------------------------------------------------
+
+    /** Pays every winning order, the way the payment module will: that sells the seats and issues the tickets. */
+    private void payAll(List<Attempt> wins) {
+        wins.forEach(a -> OrderPayments.pay(payableOrders, jdbc, a.result().orderCode()));
+    }
 
     private BaseBookingTicketResult book(Fixture f, UUID userId, List<UUID> seats) {
         return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), seats, null), userId);

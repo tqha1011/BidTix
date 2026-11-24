@@ -15,6 +15,7 @@ import com.bidtix.event.infrastructure.TicketZoneRepository;
 import com.bidtix.event.service.EventService;
 import com.bidtix.event.service.VenueService;
 import com.bidtix.event.service.ZoneService;
+import com.bidtix.payment.service.PayableOrders;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.domain.UserRole;
 import com.bidtix.user.infrastructure.UserRepository;
@@ -57,6 +58,7 @@ public class DevDataSeeder implements ApplicationRunner {
     private final EventService eventService;
     private final ZoneService zoneService;
     private final BookingService bookingService;
+    private final PayableOrders payableOrders;
     private final TicketZoneRepository ticketZoneRepository;
     private final SeatRepository seatRepository;
     private final Clock clock;
@@ -119,12 +121,14 @@ public class DevDataSeeder implements ApplicationRunner {
         return new CreateZoneRequest(name, ZoneType.SEATED, price, null, List.of(rows));
     }
 
-    /** Books the first {@code count} free seats of the zone for the customer. */
+    /** Books the first {@code count} free seats of the zone for the customer and pays for them (booking only holds the seats). */
     private void buy(User customer, EventResponse event, ZoneResponse zone, int count) {
         long zoneId = ticketZoneRepository.findByPublicId(zone.publicId()).orElseThrow().getId();
         List<UUID> seats = seatRepository.findAllAvailableSeatByTicketZoneId(zoneId).stream()
                 .limit(count).map(seat -> seat.getPublicId()).toList();
-        bookingService.bookTicket(
+        var booked = bookingService.bookTicket(
                 new BookingTicketRequest(event.publicId(), zone.publicId(), seats, null), customer.getPublicId());
+        var order = payableOrders.findOwnOrder(booked.orderCode(), customer.getPublicId()).orElseThrow();
+        payableOrders.applyPayment(order.id(), clock.instant());
     }
 }
