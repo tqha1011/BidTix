@@ -1,6 +1,6 @@
 package com.bidtix.auction.infrastructure;
 
-import com.bidtix.auction.dtos.LeaderboardEntryResponse;
+import com.bidtix.auction.dtos.Entry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.connection.RedisZSetCommands;
@@ -8,15 +8,9 @@ import org.springframework.data.redis.connection.StringRedisConnection;
 import org.springframework.data.redis.core.RedisCallback;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
-
-record Entry(
-        Long bidderId,
-        long amount
-) {
-}
+import java.util.UUID;
 
 @Component
 @Slf4j
@@ -27,7 +21,7 @@ public class AuctionLeaderBoard {
 
     private static final int DEFAULT_TOP_N = 10;
 
-    List<Entry> getLeaderboard(String auctionPublicId){
+    public List<Entry> getLeaderboard(UUID auctionPublicId){
         if(!properties.enabled()) {
             log.info("Leaderboard is disabled, returning empty list");
             return List.of();
@@ -46,7 +40,7 @@ public class AuctionLeaderBoard {
                 .toList();
     }
 
-    void setLeaderboard(String auctionPublicId, List<Entry> entries){
+    public void setLeaderboard(UUID auctionPublicId, List<Entry> entries){
         if(!properties.enabled()) {
             log.info("Leaderboard is disabled, not setting leaderboard");
             return;
@@ -59,13 +53,13 @@ public class AuctionLeaderBoard {
             for (Entry entry : entries) {
                 conn.zAdd(leaderboardKey, entry.amount(), String.valueOf(entry.bidderId()), RedisZSetCommands.ZAddArgs.empty().gt());
             }
-            conn.zRemRange(leaderboardKey, 0, topN - 1);
+            conn.zRemRange(leaderboardKey, 0, -(topN - 1));
             conn.expire(leaderboardKey, properties.ttlSeconds()); // expire in 1 hour
             return null;
         });
     }
 
-    private String buildLeaderboardKey(String auctionPublicId) {
+    private String buildLeaderboardKey(UUID auctionPublicId) {
         return "auction:leaderboard:" + auctionPublicId;
     }
 }
