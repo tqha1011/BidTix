@@ -1,6 +1,7 @@
 package com.bidtix.booking.service;
 
 import com.bidtix.booking.domain.Order;
+import com.bidtix.booking.domain.OrderPaidEvent;
 import com.bidtix.booking.domain.OrderSource;
 import com.bidtix.booking.domain.OrderStatus;
 import com.bidtix.booking.infrastructure.OrderRepository;
@@ -8,6 +9,7 @@ import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.payment.service.PayableOrders;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -22,6 +24,7 @@ public class OrderPayment implements PayableOrders {
 
     private final OrderRepository orderRepository;
     private final TicketIssuer ticketIssuer;
+    private final ApplicationEventPublisher eventPublisher;
 
     @Override
     @Transactional(readOnly = true)
@@ -41,29 +44,52 @@ public class OrderPayment implements PayableOrders {
      * status says whether another payment paid it ({@code ALREADY_PAID}) or it expired or was cancelled ({@code NOT_PAYABLE}).
      * Two confirmations at once, or a confirmation against the job that cancels expired orders, cannot both win.
      * <p>
-     * One case is an exception, not a result: if a seat's hold was lost meanwhile, {@link TicketIssuer} throws
-     * {@code ORDER_NOT_PAYABLE}. The transaction must roll back (the order goes back to PENDING_PAYMENT, no seat is sold),
-     * and the caller treats it as {@link Applied#NOT_PAYABLE} in a new transaction.
-     * <p>
-     * Auction orders are not handled yet: they need the offer accepted and the auction settled too.
+     * An auction order also has an offer and an auction to settle. That is done by whoever listens to {@link OrderPaidEvent}
+     * (the auction module), and the event is published BEFORE the order row is updated for such an order: the offer expiry job
+     * locks the offer first and the order second, so taking the locks in the same order here (offer, then order) means a payment
+     * and that job can never wait for each other. If the offer is not open any more, the listener throws
+     * {@code ORDER_NOT_PAYABLE}; the same exception comes from {@link TicketIssuer} when a reserved seat is gone. Either way
+     * the transaction must roll back (nothing is left half done) and the caller treats the payment as
+     * {@link Applied#NOT_PAYABLE} in a new transaction.
      */
     @Override
     @Transactional
     public Applied applyPayment(Long orderId, Instant paidAt) {
         Order order = orderRepository.findById(orderId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
-        if (order.getSource() == OrderSource.AUCTION) {
-            // TODO(auction-payment): accept the offer, settle the auction and move the reserved seat to SOLD
-            throw new UnsupportedOperationException("Paying an auction order is not implemented yet");
+        boolean auction = order.getSource() == OrderSource.AUCTION;
+
+        if (auction) {
+            // an unlocked read, only to give the precise answer early; the conditional UPDATEs below decide
+            OrderStatus status = statusOf(orderId);
+            if (status != OrderStatus.PENDING_PAYMENT) {
+                return status == OrderStatus.PAID ? Applied.ALREADY_PAID : Applied.NOT_PAYABLE;
+            }
+            publishPaid(order, paidAt);
         }
 
         if (orderRepository.markOrderPaid(orderId, paidAt) != 1) {
-            OrderStatus status = orderRepository.findStatusById(orderId)
-                    .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
+            if (auction) {
+                // the offer was just accepted, so the order cannot have been anything but pending: undo it all
+                throw new BusinessException(ErrorCode.ORDER_NOT_PAYABLE, "The order is no longer waiting for payment");
+            }
+            OrderStatus status = statusOf(orderId);
             return status == OrderStatus.PAID ? Applied.ALREADY_PAID : Applied.NOT_PAYABLE;
         }
-        ticketIssuer.issue(order);
+        ticketIssuer.issue(order, paidAt);
+        if (!auction) {
+            publishPaid(order, paidAt);
+        }
         return Applied.APPLIED;
+    }
+
+    private OrderStatus statusOf(Long orderId) {
+        return orderRepository.findStatusById(orderId).orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
+    }
+
+    private void publishPaid(Order order, Instant paidAt) {
+        eventPublisher.publishEvent(new OrderPaidEvent(order.getId(), order.getOrderCode(), order.getSource(),
+                order.getTotalAmount(), paidAt));
     }
 
     private static PayableOrder toPayable(Order order) {
