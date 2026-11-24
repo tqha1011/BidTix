@@ -7,16 +7,20 @@ import com.bidtix.auction.domain.Bid;
 import com.bidtix.auction.infrastructure.AuctionOfferRepository;
 import com.bidtix.auction.infrastructure.AuctionRepository;
 import com.bidtix.booking.domain.Order;
+import com.bidtix.booking.domain.OrderPaidEvent;
 import com.bidtix.booking.domain.OrderSource;
 import com.bidtix.booking.infrastructure.BookingGateway;
 import com.bidtix.booking.infrastructure.BookingProperties;
 import com.bidtix.booking.infrastructure.OrderRepository;
 import com.bidtix.common.utils.GenerateOrderCode;
+import com.bidtix.config.exceptions.BusinessException;
+import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.event.domain.Seat;
 import com.bidtix.event.infrastructure.SeatRepository;
 import com.bidtix.event.infrastructure.TicketZoneRepository;
 import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -97,6 +101,31 @@ public class AuctionSettlementService {
             throw new IllegalStateException("Zone " + auction.getZoneId() + " not found to give the ticket back to");
         }
         return new Returned(zonePublicId, null);
+    }
+
+    /**
+     * The winner (or a second-chance bidder) paid: accept the offer of this order and settle the auction, with one conditional
+     * UPDATE each, found by the order id. Runs inside the transaction that marked the order PAID (a plain, synchronous
+     * listener, not an after-commit one), so the order, the offer and the auction commit or roll back together, and a
+     * failure surfaces to the code that published the event.
+     * <p>
+     * Only auction orders matter here; any other order is ignored. If the offer cannot be accepted (it is no longer PENDING
+     * or its deadline has passed), the payment cannot stand: {@code ORDER_NOT_PAYABLE}, which rolls everything back and is
+     * handled like any other "pay too late" (the money is refunded, the expiry job then cancels the order). An auction that
+     * is not awaiting payment although its offer was pending is not something that can happen, so that is a plain error.
+     */
+    @EventListener
+    public void markAuctionOfferCompleteAndSettle(OrderPaidEvent event) {
+        if (event.source() != OrderSource.AUCTION) {
+            return;
+        }
+        if (auctionOfferRepository.markOfferAcceptedByOrderId(event.orderId(), event.paidAt()) != 1) {
+            throw new BusinessException(ErrorCode.ORDER_NOT_PAYABLE, "The offer for this order is no longer open");
+        }
+        if (auctionRepository.markAuctionSettled(event.orderId(), event.paidAt()) != 1) {
+            throw new IllegalStateException("Offer of order " + event.orderId() + " was accepted, but its auction was not "
+                    + "AWAITING_PAYMENT to settle");
+        }
     }
 
     /** Only after the commit: the ticket is really back, so the "sold out" memory is wrong from now on. */

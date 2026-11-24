@@ -103,4 +103,11 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
             """, nativeQuery = true)
     int placeBid(@Param("auctionId") Long auctionId, @Param("bidderId") Long bidderId,
                  @Param("amount") long amount, @Param("now") Instant now);
+
+
+    @Modifying
+    @Query("update Auction a set a.status = AuctionStatus.SETTLED, a.updatedAt = :now, a.version = a.version + 1 " +
+            "where a.status = AuctionStatus.AWAITING_PAYMENT and " +
+            "a.id = (select o.auction.id from AuctionOffer o where o.orderId = :orderId)")
+    int markAuctionSettled(@Param("orderId") Long orderId, @Param("now") Instant now);
 }
