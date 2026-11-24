@@ -27,11 +27,4 @@ public record BookingTicketQuantityResult(
 
     public record TicketQuantityInfo(UUID ticketPublicId) implements TicketRef {
     }
-
-    /** Same booking after payment: new status, paid time and the issued tickets. */
-    public BookingTicketQuantityResult withPayment(OrderStatus newStatus, Instant newPaidAt,
-                                                   List<TicketQuantityInfo> newTickets) {
-        return new BookingTicketQuantityResult(orderCode, newStatus, totalAmount, currency, expiresAt, newPaidAt,
-                username, eventName, address, startsAt, endsAt, zoneType, quantity, newTickets);
-    }
 }

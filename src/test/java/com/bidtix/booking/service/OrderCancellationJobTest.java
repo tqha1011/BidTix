@@ -4,14 +4,13 @@ import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.infrastructure.BookingGateway;
 import com.bidtix.booking.infrastructure.OrderCancellationJob;
 import com.bidtix.booking.service.GeneralAdmissionFixtures.Fixture;
-import com.bidtix.payment.service.PaymentGateway;
+import com.bidtix.payment.service.PayableOrders;
+import com.bidtix.support.OrderPayments;
 import com.bidtix.support.PostgresIntegrationTest;
 import jakarta.persistence.EntityManager;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.ArrayList;
@@ -24,13 +23,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
-import static org.mockito.Mockito.when;
 
 /**
- * The job that gives back the stock of orders nobody paid. A payment that fails leaves the order
- * PENDING_PAYMENT with its stock taken, which is how the tests get such orders.
+ * The job that gives back the stock of orders nobody paid. Booking leaves an order PENDING_PAYMENT with its stock taken,
+ * which is how the tests get such orders.
  */
 class OrderCancellationJobTest extends PostgresIntegrationTest {
 
@@ -40,12 +36,7 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
     @Autowired EntityManager em;
     @Autowired TransactionTemplate tx;
     @Autowired JdbcTemplate jdbc;
-    @MockitoBean PaymentGateway paymentGateway;
-
-    @BeforeEach
-    void paymentFails() {
-        when(paymentGateway.charge(anyString(), anyLong())).thenReturn(false);
-    }
+    @Autowired PayableOrders payableOrders;
 
     @Test
     void anExpiredStandingOrder_isCancelled_andItsQuantityComesBack() {
@@ -92,9 +83,9 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
 
     @Test
     void aPaidOrderPastItsDeadline_isLeftAlone() {
-        when(paymentGateway.charge(anyString(), anyLong())).thenReturn(true);
         Fixture f = fixture(10, 1);
         String code = bookQuantity(f, f.userIds().get(0), 2);
+        OrderPayments.pay(payableOrders, jdbc, code);
         expire(code);
 
         job.cancelExpiredOrders();

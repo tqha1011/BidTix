@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BidTix – Nền tảng bán vé hòa nhạc và đấu giá vé</title>
+<meta name="description" content="BidTix là dự án backend học tập: bán vé hòa nhạc giá cố định và đấu giá vé cao cấp, chịu tải đồng thời cao. Thanh toán chỉ chạy ở môi trường thử nghiệm (sandbox).">
+<style>
+  :root {
+    --bg: #fafaf7;
+    --surface: #ffffff;
+    --text: #1d1d1b;
+    --muted: #5f5f58;
+    --line: #e4e2da;
+    --accent: #b3341a;
+    --accent-soft: #f6e4de;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #151513;
+      --surface: #1e1e1b;
+      --text: #f1efe8;
+      --muted: #a8a69b;
+      --line: #34332e;
+      --accent: #f08a6f;
+      --accent-soft: #3a2620;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 17px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; padding: 0 20px; }
+  header { padding: 56px 0 36px; border-bottom: 1px solid var(--line); }
+  .brand { font-weight: 700; letter-spacing: .04em; color: var(--accent); text-transform: uppercase; font-size: 14px; }
+  h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.15; margin: 10px 0 14px; }
+  .lead { font-size: 19px; color: var(--muted); max-width: 640px; margin: 0; }
+  .notice {
+    margin-top: 26px; padding: 14px 16px; border-radius: 10px;
+    background: var(--accent-soft); border: 1px solid var(--line); font-size: 15px;
+  }
+  main section { padding: 40px 0; border-bottom: 1px solid var(--line); }
+  main section:last-child { border-bottom: 0; }
+  h2 { font-size: 24px; margin: 0 0 16px; }
+  .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .card h3 { margin: 0 0 8px; font-size: 19px; }
+  .card p { margin: 0; color: var(--muted); font-size: 16px; }
+  ul { padding-left: 20px; margin: 0; }
+  li { margin: 8px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { width: 34%; color: var(--muted); font-weight: 600; }
+  footer { padding: 28px 0 48px; color: var(--muted); font-size: 15px; border-top: 1px solid var(--line); }
+</style>
+</head>
+<body>
+<header>
+  <div class="wrap">
+    <div class="brand">BidTix</div>
+    <h1>Bán vé hòa nhạc và đấu giá vé cao cấp</h1>
+    <p class="lead">BidTix là hệ thống backend cho hai kênh bán vé: mua vé theo giá cố định và đấu giá từng vé đặc biệt. Điểm trọng tâm là giữ kết quả đúng khi có rất nhiều người cùng mua hoặc cùng trả giá.</p>
+    <div class="notice"><strong>Đây là dự án học tập và trình diễn kỹ thuật.</strong> Hệ thống chỉ kết nối cổng thanh toán ở môi trường thử nghiệm (sandbox). Không có giao dịch thật, không thu tiền thật và không bán vé thật.</div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section>
+    <h2>Hai cách mua vé</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Mua vé giá cố định</h3>
+        <p>Khu ngồi có số ghế: người mua chọn ghế cụ thể, ghế được giữ trong một thời gian ngắn để thanh toán. Khu đứng: số lượng vé được trừ nguyên tử, không bán vượt số vé có.</p>
+      </div>
+      <div class="card">
+        <h3>Đấu giá vé</h3>
+        <p>Đấu giá tăng dần cho từng vé cao cấp, có bước giá tối thiểu, tự động kéo dài giờ kết thúc nếu có người trả giá vào phút chót, hạn thanh toán cho người thắng và cơ hội cho người trả giá cao kế tiếp nếu người thắng không thanh toán.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Hệ thống đảm bảo điều gì</h2>
+    <ul>
+      <li>Không bán vượt số vé, không bán trùng một ghế cho hai người.</li>
+      <li>Không mất lượt trả giá khi nhiều người trả giá cùng lúc; giá cuối cùng luôn là giá cao nhất được chấp nhận.</li>
+      <li>Gửi lại một yêu cầu (do mạng chậm hoặc bấm hai lần) không tạo ra hai đơn hoặc hai lượt trả giá.</li>
+      <li>Bảng xếp hạng người trả giá cao nhất của từng phiên đấu giá được cập nhật gần thời gian thực.</li>
+      <li>Giới hạn tần suất truy cập để chống lạm dụng; dữ liệu đăng nhập được bảo vệ bằng token có thời hạn ngắn.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Thông tin dự án</h2>
+    <table>
+      <tr><th>Tên</th><td>BidTix</td></tr>
+      <tr><th>Loại hình</th><td>Dự án backend phục vụ học tập và portfolio, chưa vận hành thương mại</td></tr>
+      <tr><th>Sản phẩm</th><td>Vé hòa nhạc (giá cố định) và vé đấu giá, đều là dữ liệu mô phỏng</td></tr>
+      <tr><th>Tiền tệ</th><td>Việt Nam đồng (VND)</td></tr>
+      <tr><th>Thanh toán</th><td>Cổng VNPay, môi trường thử nghiệm (sandbox)</td></tr>
+      <tr><th>Công nghệ</th><td>Java 21, Spring Boot, PostgreSQL, Redis</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Chính sách</h2>
+    <ul>
+      <li>Vì đây là môi trường thử nghiệm, mọi đơn hàng và giao dịch chỉ để kiểm tra hệ thống. Không có khoản tiền thật nào được chuyển, nên không phát sinh hoàn tiền hay đổi trả.</li>
+      <li>Hệ thống chỉ lưu thông tin tối thiểu để đăng nhập (email, tên hiển thị, mật khẩu đã được băm). Không lưu số thẻ hay thông tin thanh toán; việc này do cổng thanh toán xử lý.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Liên hệ</h2>
+    <p>Email: <a href="mailto:EMAIL_CUA_BAN">EMAIL_CUA_BAN</a></p>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">© 2026 BidTix – dự án học tập, chỉ chạy ở môi trường thử nghiệm.</div>
+</footer>
+</body>
+</html>

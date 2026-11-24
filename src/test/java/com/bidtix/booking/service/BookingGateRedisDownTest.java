@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -23,7 +24,11 @@ import static org.mockito.Mockito.doThrow;
 /**
  * Redis is unreachable: the gate must step aside, so booking works and PostgreSQL still decides.
  * (A separate class because the spy gives it its own application context.)
+ * <p>
+ * The scheduled jobs are off here: they call Redis from their own thread as soon as the context starts, and one of those calls
+ * landing between {@code doThrow(...).when(redis)} and {@code .opsForValue()} breaks the stubbing (UnfinishedStubbingException).
  */
+@TestPropertySource(properties = "bidtix.scheduling.enabled=false")
 class BookingGateRedisDownTest extends PostgresIntegrationTest {
 
     @Autowired BookingService bookingService;
@@ -39,7 +44,7 @@ class BookingGateRedisDownTest extends PostgresIntegrationTest {
         // standing: a purchase goes through...
         assertThat(bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), f.userIds().get(0)).status())
-                .isEqualTo(OrderStatus.PAID);
+                .isEqualTo(OrderStatus.PENDING_PAYMENT);
         // ...and the sold-out answer comes from the database (it carries the hint), without the failed flag write breaking it
         assertThatThrownBy(() -> bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), f.userIds().get(1)))
@@ -52,7 +57,7 @@ class BookingGateRedisDownTest extends PostgresIntegrationTest {
         var seat = f.seatedSeatIds().get(0);
         assertThat(bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), f.userIds().get(0)).status())
-                .isEqualTo(OrderStatus.PAID);
+                .isEqualTo(OrderStatus.PENDING_PAYMENT);
         assertThatThrownBy(() -> bookingService.bookTicket(
                 new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), f.userIds().get(1)))
                 .isInstanceOfSatisfying(BusinessException.class, e ->

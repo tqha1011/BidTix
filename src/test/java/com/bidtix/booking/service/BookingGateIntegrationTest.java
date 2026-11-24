@@ -49,7 +49,7 @@ class BookingGateIntegrationTest extends PostgresIntegrationTest {
         assertThat(gateway.mayTakeQuantity(f.zoneId(), 3)).isFalse();
         assertThat(gateway.mayTakeQuantity(f.zoneId(), 4)).isFalse();
         assertThat(gateway.mayTakeQuantity(f.zoneId(), 2)).isTrue();
-        assertThat(bookQuantity(f, f.userIds().get(1), 2).status()).isEqualTo(OrderStatus.PAID);
+        assertThat(bookQuantity(f, f.userIds().get(1), 2).status()).isEqualTo(OrderStatus.PENDING_PAYMENT);
     }
 
     @Test
@@ -68,7 +68,7 @@ class BookingGateIntegrationTest extends PostgresIntegrationTest {
         assertThat(orders(f)).as("no order was even inserted").isZero();
         assertThat(available(f)).isEqualTo(10);
 
-        assertThat(bookQuantity(f, f.userIds().get(1), 2).status()).as("below the flag").isEqualTo(OrderStatus.PAID);
+        assertThat(bookQuantity(f, f.userIds().get(1), 2).status()).as("below the flag").isEqualTo(OrderStatus.PENDING_PAYMENT);
         assertThat(available(f)).isEqualTo(8);
     }
 
@@ -84,7 +84,7 @@ class BookingGateIntegrationTest extends PostgresIntegrationTest {
         }
 
         assertThat(gateway.mayTakeQuantity(f.zoneId(), 3)).as("flag gone").isTrue();
-        assertThat(bookQuantity(f, f.userIds().get(0), 3).status()).isEqualTo(OrderStatus.PAID);
+        assertThat(bookQuantity(f, f.userIds().get(0), 3).status()).isEqualTo(OrderStatus.PENDING_PAYMENT);
     }
 
     // ---- seats -----------------------------------------------------------------------------
@@ -95,7 +95,7 @@ class BookingGateIntegrationTest extends PostgresIntegrationTest {
         UUID taken = f.seatedSeatIds().get(0);
         UUID free = f.seatedSeatIds().get(1);
 
-        assertThat(bookSeats(f, f.userIds().get(0), taken).status()).isEqualTo(OrderStatus.PAID);
+        assertThat(bookSeats(f, f.userIds().get(0), taken).status()).isEqualTo(OrderStatus.PENDING_PAYMENT);
         assertThatThrownBy(() -> bookSeats(f, f.userIds().get(1), taken, free))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SEAT_UNAVAILABLE));
@@ -107,7 +107,7 @@ class BookingGateIntegrationTest extends PostgresIntegrationTest {
                     assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SEAT_UNAVAILABLE);
                     assertThat(e.getProperties()).containsEntry("seatPublicIds", List.of(taken));
                 });
-        assertThat(bookSeats(f, f.userIds().get(2), free).status()).isEqualTo(OrderStatus.PAID);
+        assertThat(bookSeats(f, f.userIds().get(2), free).status()).isEqualTo(OrderStatus.PENDING_PAYMENT);
     }
 
     @Test
@@ -121,7 +121,7 @@ class BookingGateIntegrationTest extends PostgresIntegrationTest {
                         assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SEAT_UNAVAILABLE));
         assertThat(orders(f)).as("no order was even inserted").isZero();
 
-        assertThat(bookSeats(f, f.userIds().get(1), f.seatedSeatIds().get(3)).status()).isEqualTo(OrderStatus.PAID);
+        assertThat(bookSeats(f, f.userIds().get(1), f.seatedSeatIds().get(3)).status()).isEqualTo(OrderStatus.PENDING_PAYMENT);
     }
 
     @Test

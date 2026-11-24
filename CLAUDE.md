@@ -91,6 +91,12 @@ seat-hold or payment flow).
 ./mvnw clean package                   # build jar
 ```
 
+**CI** (`.github/workflows/ci.yml`): every pull request into `main`, and every push to `main`, runs `make keys` (the JWT keys are git-ignored and
+the app will not start without them) and `./mvnw -B -ntp verify` on `ubuntu-latest` (Docker is there, so the Testcontainers tests run). The benchmarks are
+tagged `benchmark` and skipped. To reproduce a CI run locally: `make keys && ./mvnw -B -ntp verify` (Docker needed). A failed run keeps
+`target/surefire-reports/` as an artifact. `bidtix.scheduling.enabled=false` turns the `@Scheduled` jobs off; only a test that would race with a
+background job sets it (see `BookingGateRedisDownTest`).
+
 Swagger UI: `http://localhost:8080/swagger-ui/index.html` · OpenAPI: `/v3/api-docs`. Both are public,
 as is `/api/v1/auth/**`; every other route (including `/actuator/**`, where only `health` is exposed)
 needs a Bearer token.

@@ -12,6 +12,8 @@ import com.bidtix.auction.service.BidService;
 import com.bidtix.auction.service.LeaderboardService;
 import com.bidtix.booking.controller.AdminTicketController;
 import com.bidtix.booking.controller.OrderController;
+import com.bidtix.payment.controller.PaymentController;
+import com.bidtix.payment.service.PaymentService;
 import com.bidtix.booking.dtos.BookingTicketQuantityResult;
 import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.service.BookingService;
@@ -91,6 +93,7 @@ class MethodAuthorizationTest {
     @Autowired BidService bidService;
     @Autowired LeaderboardService leaderboardService;
     @Autowired BookingService bookingService;
+    @Autowired PaymentService paymentService;
     @Autowired JwtDecoder jwtDecoder;
     @Autowired EventService eventService;
 
@@ -305,6 +308,49 @@ class MethodAuthorizationTest {
         }
     }
 
+    // ---- POST /orders/{code}/payments: CUSTOMER only ------------------------------------------
+
+    @Test
+    void payOrder_customer_isAllowed_andServiceGetsTheCodeTokenSubjectAndTheCallersAddress() throws Exception {
+        when(paymentService.createUrlPayment(eq("ORDER_1"), eq(USER_ID), any())).thenReturn("https://pay.example/vpcpay?x=1");
+
+        mvc.perform(post("/api/v1/orders/ORDER_1/payments").header(HttpHeaders.AUTHORIZATION, "Bearer CUSTOMER")
+                        .with(request -> {
+                            request.setRemoteAddr("203.0.113.7");
+                            return request;
+                        }))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.paymentUrl").value("https://pay.example/vpcpay?x=1"));
+
+        verify(paymentService).createUrlPayment("ORDER_1", USER_ID, "203.0.113.7");
+    }
+
+    @Test
+    void payOrder_adminAndOrganizer_areForbidden() throws Exception {
+        for (String role : List.of("ADMIN", "ORGANIZER")) {
+            mvc.perform(post("/api/v1/orders/ORDER_1/payments").header(HttpHeaders.AUTHORIZATION, "Bearer " + role))
+                    .andExpect(forbidden());
+        }
+    }
+
+    @Test
+    void payOrder_withoutToken_is401() throws Exception {
+        mvc.perform(post("/api/v1/orders/ORDER_1/payments")).andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void payOrder_unknownOrder_is404_andAnOrderThatCannotBePaid_is409() throws Exception {
+        when(paymentService.createUrlPayment(eq("ORDER_NONE"), eq(USER_ID), any()))
+                .thenThrow(new BusinessException(ErrorCode.ORDER_NOTFOUND));
+        when(paymentService.createUrlPayment(eq("ORDER_PAID"), eq(USER_ID), any()))
+                .thenThrow(new BusinessException(ErrorCode.ORDER_NOT_PAYABLE));
+
+        mvc.perform(post("/api/v1/orders/ORDER_NONE/payments").header(HttpHeaders.AUTHORIZATION, "Bearer CUSTOMER"))
+                .andExpect(status().isNotFound()).andExpect(jsonPath("$.code").value("ORDER_NOTFOUND"));
+        mvc.perform(post("/api/v1/orders/ORDER_PAID/payments").header(HttpHeaders.AUTHORIZATION, "Bearer CUSTOMER"))
+                .andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("ORDER_NOT_PAYABLE"));
+    }
+
     // ---- POST /orders: CUSTOMER only ----------------------------------------------------------
 
     @Test
@@ -444,7 +490,7 @@ class MethodAuthorizationTest {
     @EnableWebMvc
     @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class,
             GlobalExceptionHandler.class, VenueController.class, EventController.class,
-            AdminTicketController.class, AuctionController.class, BidController.class, LeaderboardController.class, OrderController.class})
+            AdminTicketController.class, AuctionController.class, BidController.class, LeaderboardController.class, OrderController.class, PaymentController.class})
     static class TestConfig {
         @Bean JwtDecoder jwtDecoder() { return mock(JwtDecoder.class); }
         @Bean VenueService venueService() { return mock(VenueService.class); }
@@ -455,5 +501,6 @@ class MethodAuthorizationTest {
         @Bean BidService bidService() { return mock(BidService.class); }
         @Bean LeaderboardService leaderboardService() { return mock(LeaderboardService.class); }
         @Bean BookingService bookingService() { return mock(BookingService.class); }
+        @Bean PaymentService paymentService() { return mock(PaymentService.class); }
     }
 }

@@ -32,7 +32,11 @@ public class Payment extends AuditableEntity {
     @Column(name = "provider", nullable = false, updatable = false, length = 20)
     private PaymentProvider provider;
 
-    /** Assigned once the provider accepts the payment request. */
+    /** Our reference for this attempt (VNPAY's vnp_TxnRef): the provider's callback names the payment by it. */
+    @Column(name = "txn_ref", nullable = false, updatable = false, length = 100)
+    private String txnRef;
+
+    /** The provider's own transaction number, known once it confirms the payment. */
     @Column(name = "provider_txn_id", length = 100)
     private String providerTxnId;
 
@@ -59,9 +63,10 @@ public class Payment extends AuditableEntity {
     @Column(name = "version", nullable = false)
     private long version;
 
-    public Payment(Long orderId, PaymentProvider provider, long amount) {
+    public Payment(Long orderId, PaymentProvider provider, String txnRef, long amount) {
         this.orderId = orderId;
         this.provider = provider;
+        this.txnRef = txnRef;
         this.amount = amount;
     }
 }

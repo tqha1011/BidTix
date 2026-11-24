@@ -20,7 +20,9 @@ public class SecurityConfiguration {
     private final static String[] WHITELISTED_PATHS = {
             "/api/v1/auth/**",
             "/swagger-ui/**",
-            "/v3/api-docs/**"
+            "/v3/api-docs/**",
+            "/api/v1/payments/vnpay/return",
+            "/api/v1/payments/vnpay/ipn"
     };
 
     /**

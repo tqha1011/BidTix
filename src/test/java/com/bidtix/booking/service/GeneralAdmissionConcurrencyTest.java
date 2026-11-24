@@ -5,6 +5,8 @@ import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.service.GeneralAdmissionFixtures.Fixture;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
+import com.bidtix.payment.service.PayableOrders;
+import com.bidtix.support.OrderPayments;
 import com.bidtix.support.PostgresIntegrationTest;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
@@ -34,6 +36,7 @@ class GeneralAdmissionConcurrencyTest extends PostgresIntegrationTest {
     @Autowired EntityManager em;
     @Autowired TransactionTemplate tx;
     @Autowired JdbcTemplate jdbc;
+    @Autowired PayableOrders payableOrders;
 
     /** Outcome of one parallel booking. */
     private record Attempt(int quantity, BaseBookingTicketResult result, Throwable error) {
@@ -48,6 +51,8 @@ class GeneralAdmissionConcurrencyTest extends PostgresIntegrationTest {
         assertOnlySoldOutFailures(attempts);
         assertThat(winners(attempts)).as("successful bookings").hasSize(1);
         assertThat(available(f)).isZero();
+        assertThat(ticketsInZone(f)).as("no ticket before payment").isZero();
+        payAll(winners(attempts));
         assertThat(ticketsInZone(f)).isEqualTo(1);
         assertThat(orders(f)).as("losers must leave no order behind").isEqualTo(1);
     }
@@ -68,6 +73,7 @@ class GeneralAdmissionConcurrencyTest extends PostgresIntegrationTest {
         assertThat(wins).as("at least one booking must succeed").isNotEmpty();
         assertThat(soldInResponses).as("tickets promised to clients").isLessThanOrEqualTo(capacity);
         assertThat(available(f)).as("counter == capacity - sold (no lost update)").isEqualTo(capacity - soldInResponses);
+        payAll(wins);
         assertThat(ticketsInZone(f)).as("tickets in the DB").isEqualTo(soldInResponses);
         assertThat(orders(f)).as("only successful bookings leave an order").isEqualTo(wins.size());
         // the stock is not wasted either: what is left is smaller than the smallest request that failed
@@ -76,6 +82,11 @@ class GeneralAdmissionConcurrencyTest extends PostgresIntegrationTest {
     }
 
     // ---- helpers ---------------------------------------------------------------------------
+
+    /** Pays every winning order, the way the payment module will: that issues the tickets. */
+    private void payAll(List<Attempt> wins) {
+        wins.forEach(a -> OrderPayments.pay(payableOrders, jdbc, a.result().orderCode()));
+    }
 
     private void assertOnlySoldOutFailures(List<Attempt> attempts) {
         List<Throwable> unexpected = attempts.stream()

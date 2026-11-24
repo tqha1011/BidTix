@@ -3,6 +3,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/tqha1011/BidTix/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/tqha1011/BidTix/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Java 21" src="https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white">
   <img alt="Spring Boot 4" src="https://img.shields.io/badge/Spring%20Boot-4-6DB33F?logo=springboot&logoColor=white">
   <img alt="PostgreSQL" src="https://img.shields.io/badge/PostgreSQL-source%20of%20truth-4169E1?logo=postgresql&logoColor=white">

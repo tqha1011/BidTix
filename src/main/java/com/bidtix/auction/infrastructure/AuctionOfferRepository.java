@@ -41,4 +41,10 @@ public interface AuctionOfferRepository extends JpaRepository<AuctionOffer, Long
     @Query("update AuctionOffer o set o.status = com.bidtix.auction.domain.OfferStatus.ACCEPTED, o.updatedAt = :now " +
             "where o.id = :offerId and o.status = com.bidtix.auction.domain.OfferStatus.PENDING")
     int markAccepted(@Param("offerId") Long offerId, @Param("now") Instant now);
+
+
+    @Modifying
+    @Query("update AuctionOffer o set o.status = com.bidtix.auction.domain.OfferStatus.ACCEPTED, o.updatedAt = :now " +
+            "where o.orderId = :orderId and o.status = com.bidtix.auction.domain.OfferStatus.PENDING and o.expiresAt > :now")
+    int markOfferAcceptedByOrderId(@Param("orderId") Long orderId, @Param("now") Instant now);
 }

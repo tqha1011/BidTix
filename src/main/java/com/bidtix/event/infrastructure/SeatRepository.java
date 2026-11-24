@@ -4,6 +4,7 @@ import com.bidtix.event.domain.Seat;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
@@ -82,6 +83,12 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
             "set s.status = 'AVAILABLE', s.version = s.version + 1 " +
             "where s.id = :seatId and s.status = 'RESERVED_FOR_AUCTION'")
     int releaseSeatFromAuction(Long seatId);
+
+    @Modifying
+    @Query("update Seat s " +
+            "set s.version = s.version + 1, s.status = SeatStatus.SOLD, s.updatedAt = :now " +
+            "where s.id = :seatId and s.status = SeatStatus.RESERVED_FOR_AUCTION")
+    int updateAuctionSeatSold(@Param("seatId") Long seatId, @Param("now") Instant now);
 
     interface HeldSeat {
         UUID getSeatPublicId();

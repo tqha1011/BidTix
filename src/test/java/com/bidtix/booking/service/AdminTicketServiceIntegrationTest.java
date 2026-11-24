@@ -11,6 +11,8 @@ import com.bidtix.event.domain.Seat;
 import com.bidtix.event.domain.TicketZone;
 import com.bidtix.event.domain.Venue;
 import com.bidtix.event.domain.ZoneType;
+import com.bidtix.payment.service.PayableOrders;
+import com.bidtix.support.OrderPayments;
 import com.bidtix.support.PostgresIntegrationTest;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.domain.UserRole;
@@ -36,6 +38,7 @@ class AdminTicketServiceIntegrationTest extends PostgresIntegrationTest {
     @Autowired EntityManager em;
     @Autowired TransactionTemplate tx;
     @Autowired JdbcTemplate jdbc;
+    @Autowired PayableOrders payableOrders;
 
     /** An event with 5 seats whose tickets were all bought, each by a different customer. */
     private record Sold(UUID eventId, List<UUID> ticketIds, List<String> ownerEmails) {
@@ -103,7 +106,7 @@ class AdminTicketServiceIntegrationTest extends PostgresIntegrationTest {
 
     // ---- helpers ---------------------------------------------------------------------------
 
-    /** Creates an event with {@code count} seats and has a different customer buy each one. */
+    /** Creates an event with {@code count} seats and has a different customer book and pay for each one. */
     private Sold sellTickets(int count) {
         String run = UUID.randomUUID().toString().substring(0, 8);
         record Setup(UUID eventId, UUID zoneId, List<UUID> seatIds, List<UUID> userIds, List<String> emails) {
@@ -140,7 +143,9 @@ class AdminTicketServiceIntegrationTest extends PostgresIntegrationTest {
         for (int i = 0; i < count; i++) {
             var result = bookingService.bookTicket(new BookingTicketRequest(setup.eventId(), setup.zoneId(),
                     List.of(setup.seatIds().get(i)), null), setup.userIds().get(i));
-            result.tickets().forEach(t -> ticketIds.add(t.ticketPublicId()));
+            OrderPayments.pay(payableOrders, jdbc, result.orderCode());   // booking only holds the seat: paying issues the ticket
+            ticketIds.addAll(jdbc.queryForList("select t.public_id from tickets t join orders o on o.id = t.order_id "
+                    + "where o.order_code = ?", UUID.class, result.orderCode()));
         }
         return new Sold(setup.eventId(), ticketIds, setup.emails());
     }

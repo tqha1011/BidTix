@@ -33,6 +33,10 @@ spring:
     locations: classpath:db/migration
 
 bidtix:
+  # The @Scheduled jobs (auction activation and closing, offer expiry, unpaid-order cancellation) run unless this is false.
+  # Only a test that must not race with a background job turns it off.
+  scheduling:
+    enabled: true
   jwt:
     # PEM files: private key = PKCS#8 ("BEGIN PRIVATE KEY"), public key = X.509 ("BEGIN PUBLIC KEY").
     # Generate dev keys into ./keys (git-ignored); in real deployments override with env vars.
@@ -45,6 +49,18 @@ bidtix:
       # BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false; keep true everywhere else.
       secure: true
 
+  # VNPAY (see payment/infrastructure). The merchant code and the secret come from the merchant account: set them with
+  # environment variables and never commit them. pay-url is the sandbox; the production URL is the only change to go live.
+  payment:
+    vnpay:
+      tmn-code: ${VNP_TMNCODE:}
+      hash-secret: ${VNP_HASH_SECRET:}
+      pay-url: ${VNP_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
+      return-url: ${VNP_RETURN_URL:http://localhost:8080/api/v1/payments/vnpay/return}
+      ipn-url: ${VNP_IPN_URL:http://localhost:8080/api/v1/payments/vnpay/ipn}
+      version: 2.1.0
+      command: pay
+
   # Idempotency-Key (see common/idempotency): a retried POST with the same key and body runs once and then replays the
   # stored response. `paths` are the POST routes that REQUIRE the header. Keys are kept for `ttl`; a key left
   # PROCESSING for longer than `processing-timeout` (the server died mid-request) can be used again.
@@ -55,6 +71,7 @@ bidtix:
     paths:
       - /api/v1/auctions/*/bids
       - /api/v1/orders
+      - /api/v1/orders/*/payments
 
   # Rate limit (see config/ratelimit). A policy is one of two algorithms, chosen with `algorithm`:
   #   fixed-window (default): at most `limit` requests per `window`, counted from the first request.
