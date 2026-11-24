@@ -52,8 +52,11 @@ class VenueCacheIntegrationTest extends PostgresIntegrationTest {
 
         assertThat(venueService.getByPublicId(created.publicId())).isEqualTo(created);
 
-        // once the entry is gone the truth (PostgreSQL) wins again
+        // once the entry is gone the truth (PostgreSQL) wins again. An evict is not visible the instant it returns either
+        // (see CacheConfig), so wait until the cache no longer has it; on a slow machine the next read came too soon.
         cacheManager.getCache(CacheConfig.VENUES).evict(created.publicId());
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(cacheManager.getCache(CacheConfig.VENUES).get(created.publicId())).isNull());
         assertThatThrownBy(() -> venueService.getByPublicId(created.publicId()))
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.VENUE_NOTFOUND));

@@ -12,6 +12,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.cache.CacheManager;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -38,6 +39,7 @@ class CacheStampedeIntegrationTest extends PostgresIntegrationTest {
     @Autowired VenueService venueService;
     @Autowired CacheManager cacheManager;
     @Autowired EntityManagerFactory entityManagerFactory;
+    @Autowired JdbcTemplate jdbc;
 
     private Statistics statistics;
 
@@ -61,13 +63,20 @@ class CacheStampedeIntegrationTest extends PostgresIntegrationTest {
     @Test
     void manyRequestsForAnEmptyEventPage_loadItFromPostgresOnce() throws Exception {
         cacheManager.getCache(CacheConfig.EVENTS).invalidate();
+        // the database is shared by every test class, so it may hold many published events by now
+        long published = jdbc.queryForObject(
+                "select count(*) from events where status = 'PUBLISHED' and starts_at > now()", Long.class);
         statistics.clear();
 
         List<Object> pages = new ArrayList<>(allAtOnce(() -> eventService.listPublished(0, 100)));
 
         assertThat(pages).hasSize(REQUESTS);
         assertThat(pages).as("everybody got the same page").containsOnly(pages.get(0));
-        assertThat(selectsFrom("from Event")).as("loads from PostgreSQL").isEqualTo(1);
+        // One load is one data query. A FULL page (100 events or more) also makes Spring Data run a count query to know the
+        // total, and Hibernate reports it with the same text as the data query (there is no "count(" in it), so it is counted too.
+        long statementsPerLoad = published >= 100 ? 2 : 1;
+        assertThat(selectsFrom("from Event")).as("loads from PostgreSQL (%d published events in the database)", published)
+                .isEqualTo(statementsPerLoad);
     }
 
     /** How many times a select (not a count) on the given entity ran since {@code statistics.clear()}. */
