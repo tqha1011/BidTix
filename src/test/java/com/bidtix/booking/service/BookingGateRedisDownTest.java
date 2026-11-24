@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.redis.RedisConnectionFailureException;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -23,7 +24,11 @@ import static org.mockito.Mockito.doThrow;
 /**
  * Redis is unreachable: the gate must step aside, so booking works and PostgreSQL still decides.
  * (A separate class because the spy gives it its own application context.)
+ * <p>
+ * The scheduled jobs are off here: they call Redis from their own thread as soon as the context starts, and one of those calls
+ * landing between {@code doThrow(...).when(redis)} and {@code .opsForValue()} breaks the stubbing (UnfinishedStubbingException).
  */
+@TestPropertySource(properties = "bidtix.scheduling.enabled=false")
 class BookingGateRedisDownTest extends PostgresIntegrationTest {
 
     @Autowired BookingService bookingService;

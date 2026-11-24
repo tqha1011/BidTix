@@ -33,6 +33,10 @@ spring:
     locations: classpath:db/migration
 
 bidtix:
+  # The @Scheduled jobs (auction activation and closing, offer expiry, unpaid-order cancellation) run unless this is false.
+  # Only a test that must not race with a background job turns it off.
+  scheduling:
+    enabled: true
   jwt:
     # PEM files: private key = PKCS#8 ("BEGIN PRIVATE KEY"), public key = X.509 ("BEGIN PUBLIC KEY").
     # Generate dev keys into ./keys (git-ignored); in real deployments override with env vars.
