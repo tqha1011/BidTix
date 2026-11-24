@@ -45,6 +45,17 @@ bidtix:
       # BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false; keep true everywhere else.
       secure: true
 
+  # VNPAY (see payment/infrastructure). The merchant code and the secret come from the merchant account: set them with
+  # environment variables and never commit them. pay-url is the sandbox; the production URL is the only change to go live.
+  payment:
+    vnpay:
+      tmn-code: ${VNP_TMNCODE:}
+      hash-secret: ${VNP_HASH_SECRET:}
+      pay-url: ${VNP_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
+      return-url: ${VNP_RETURN_URL:http://localhost:8080/api/v1/payments/vnpay/return}
+      ipn-url: ${VNP_IPN_URL:http://localhost:8080/api/v1/payments/vnpay/ipn}
+      version: 2.1.0
+
   # Idempotency-Key (see common/idempotency): a retried POST with the same key and body runs once and then replays the
   # stored response. `paths` are the POST routes that REQUIRE the header. Keys are kept for `ttl`; a key left
   # PROCESSING for longer than `processing-timeout` (the server died mid-request) can be used again.
