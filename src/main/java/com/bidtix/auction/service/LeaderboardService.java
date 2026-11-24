@@ -1,6 +1,7 @@
 package com.bidtix.auction.service;
 
 import com.bidtix.auction.domain.Auction;
+import com.bidtix.auction.domain.BidPlacedEvent;
 import com.bidtix.auction.domain.LeaderboardEntry;
 import com.bidtix.auction.dtos.LeaderboardEntryResponse;
 import com.bidtix.auction.infrastructure.AuctionLeaderBoard;
@@ -13,6 +14,8 @@ import com.bidtix.user.infrastructure.UserRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.event.TransactionPhase;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.util.Collection;
 import java.util.List;
@@ -50,6 +53,15 @@ public class LeaderboardService {
                     );
                 })
                 .toList();
+    }
+
+    /**
+     * Keeps a cached leaderboard current once a bid is committed (never before: a rolled-back bid must not show up).
+     * Only touches a leaderboard that is already cached; see {@link AuctionLeaderBoard#recordBid}.
+     */
+    @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
+    public void onBidPlaced(BidPlacedEvent event) {
+        auctionLeaderBoard.recordBid(event.auctionPublicId(), new LeaderboardEntry(event.bidderId(), event.amount()));
     }
 
     private Map<Long,String> findUsernamesAndConvertToHashMap(Collection<Long> bidderIds){

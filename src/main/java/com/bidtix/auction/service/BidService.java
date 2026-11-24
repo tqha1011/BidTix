@@ -3,6 +3,7 @@ package com.bidtix.auction.service;
 import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.domain.Bid;
+import com.bidtix.auction.domain.BidPlacedEvent;
 import com.bidtix.auction.dtos.PlaceBidRequest;
 import com.bidtix.auction.dtos.PlaceBidResponse;
 import com.bidtix.auction.infrastructure.AuctionRepository;
@@ -12,6 +13,7 @@ import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.infrastructure.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -26,6 +28,7 @@ public class BidService {
     private final BidRepository bidRepository;
     private final UserRepository userRepository;
     private final Clock clock;
+    private final ApplicationEventPublisher events;
 
     /**
      * Places a bid. Step 1 refuses an obviously bad bid from the auction row alone, before the bidder is read and before
@@ -60,6 +63,7 @@ public class BidService {
             throw why != null ? why : new BusinessException(ErrorCode.INVALID_MONEY_BID);
         }
         bidRepository.save(new Bid(auctionRepository.getReferenceById(auction.getId()), bidder.getId(), amount));
+        events.publishEvent(new BidPlacedEvent(auction.getPublicId(), bidder.getId(), amount));
         return PlaceBidResponse.create(bidder.getPublicId(), auction.getPublicId(), amount, bidder.getFullName());
     }
 
