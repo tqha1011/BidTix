@@ -4,7 +4,7 @@ package com.bidtix.auction.dtos;
 public record LeaderboardEntryResponse(
         /* 1 is the highest bid */
         int rank,
-        /* the bidder's name, already masked: never the real name, email or an id */
+        /* the bidder's name as they registered it; never the email or an id */
         String bidderName,
         /* VND: the bidder's highest bid in this auction */
         long amount

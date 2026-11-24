@@ -2,11 +2,14 @@ package com.bidtix.config.security;
 
 import com.bidtix.auction.controller.AuctionController;
 import com.bidtix.auction.controller.BidController;
+import com.bidtix.auction.controller.LeaderboardController;
 import com.bidtix.auction.domain.AuctionStatus;
+import com.bidtix.auction.dtos.LeaderboardEntryResponse;
 import com.bidtix.auction.dtos.PlaceBidRequest;
 import com.bidtix.auction.dtos.PlaceBidResponse;
 import com.bidtix.auction.service.AuctionService;
 import com.bidtix.auction.service.BidService;
+import com.bidtix.auction.service.LeaderboardService;
 import com.bidtix.booking.controller.AdminTicketController;
 import com.bidtix.booking.controller.OrderController;
 import com.bidtix.booking.dtos.BookingTicketQuantityResult;
@@ -16,6 +19,8 @@ import com.bidtix.booking.domain.OrderStatus;
 import com.bidtix.event.domain.ZoneType;
 import com.bidtix.booking.service.AdminTicketService;
 import com.bidtix.common.dtos.PageResponse;
+import com.bidtix.config.exceptions.BusinessException;
+import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.config.exceptions.GlobalExceptionHandler;
 import com.bidtix.event.controller.EventController;
 import com.bidtix.event.controller.VenueController;
@@ -84,6 +89,7 @@ class MethodAuthorizationTest {
     @Autowired WebApplicationContext context;
     @Autowired AuctionService auctionService;
     @Autowired BidService bidService;
+    @Autowired LeaderboardService leaderboardService;
     @Autowired BookingService bookingService;
     @Autowired JwtDecoder jwtDecoder;
     @Autowired EventService eventService;
@@ -213,6 +219,49 @@ class MethodAuthorizationTest {
     @Test
     void listAuctions_unknownStatus_is400() throws Exception {
         mvc.perform(get("/api/v1/auctions?status=NOPE").header(HttpHeaders.AUTHORIZATION, "Bearer CUSTOMER"))
+                .andExpect(status().isBadRequest());
+    }
+
+    // ---- GET /auctions/{id}/leaderboard: any logged-in user -----------------------------------
+
+    @Test
+    void leaderboard_anyLoggedInRole_isAllowed_andServiceGetsThePathAuction() throws Exception {
+        UUID auctionId = UUID.randomUUID();
+        when(leaderboardService.getAuctionLeaderboard(auctionId)).thenReturn(List.of(
+                new LeaderboardEntryResponse(1, "Ann", 150_000L), new LeaderboardEntryResponse(2, "Bob", 120_000L)));
+
+        for (String role : List.of("ADMIN", "ORGANIZER", "CUSTOMER")) {
+            mvc.perform(get("/api/v1/auctions/" + auctionId + "/leaderboard")
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + role))
+                    .andExpect(status().isOk())
+                    .andExpect(jsonPath("$.length()").value(2))
+                    .andExpect(jsonPath("$[0].rank").value(1))
+                    .andExpect(jsonPath("$[0].bidderName").value("Ann"))
+                    .andExpect(jsonPath("$[0].amount").value(150_000));
+        }
+        verify(leaderboardService, atLeastOnce()).getAuctionLeaderboard(auctionId);
+    }
+
+    @Test
+    void leaderboard_withoutToken_is401() throws Exception {
+        mvc.perform(get("/api/v1/auctions/" + UUID.randomUUID() + "/leaderboard"))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void leaderboard_unknownAuction_is404() throws Exception {
+        UUID auctionId = UUID.randomUUID();
+        when(leaderboardService.getAuctionLeaderboard(auctionId))
+                .thenThrow(new BusinessException(ErrorCode.AUCTION_NOT_FOUND));
+
+        mvc.perform(get("/api/v1/auctions/" + auctionId + "/leaderboard").header(HttpHeaders.AUTHORIZATION, "Bearer CUSTOMER"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("AUCTION_NOT_FOUND"));
+    }
+
+    @Test
+    void leaderboard_malformedAuctionId_is400() throws Exception {
+        mvc.perform(get("/api/v1/auctions/not-a-uuid/leaderboard").header(HttpHeaders.AUTHORIZATION, "Bearer CUSTOMER"))
                 .andExpect(status().isBadRequest());
     }
 
@@ -395,7 +444,7 @@ class MethodAuthorizationTest {
     @EnableWebMvc
     @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class,
             GlobalExceptionHandler.class, VenueController.class, EventController.class,
-            AdminTicketController.class, AuctionController.class, BidController.class, OrderController.class})
+            AdminTicketController.class, AuctionController.class, BidController.class, LeaderboardController.class, OrderController.class})
     static class TestConfig {
         @Bean JwtDecoder jwtDecoder() { return mock(JwtDecoder.class); }
         @Bean VenueService venueService() { return mock(VenueService.class); }
@@ -404,6 +453,7 @@ class MethodAuthorizationTest {
         @Bean AdminTicketService adminTicketService() { return mock(AdminTicketService.class); }
         @Bean AuctionService auctionService() { return mock(AuctionService.class); }
         @Bean BidService bidService() { return mock(BidService.class); }
+        @Bean LeaderboardService leaderboardService() { return mock(LeaderboardService.class); }
         @Bean BookingService bookingService() { return mock(BookingService.class); }
     }
 }

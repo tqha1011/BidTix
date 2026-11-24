@@ -1,8 +1,8 @@
 package com.bidtix.auction.service;
 
 import com.bidtix.auction.dtos.CreateAuctionRequest;
+import com.bidtix.auction.domain.LeaderboardEntry;
 import com.bidtix.auction.infrastructure.BidRepository;
-import com.bidtix.auction.infrastructure.BidRepository.TopBid;
 import com.bidtix.auction.service.AuctionFixtures.Fixture;
 import com.bidtix.event.service.EventService;
 import com.bidtix.event.service.VenueService;
@@ -50,10 +50,10 @@ class BidTopBidsTest extends PostgresIntegrationTest {
         bid(auction, cat, 130_000);
         bid(auction, dee, 140_000);
 
-        List<TopBid> top = bids.findTopBids(auction, PageRequest.of(0, 3));
+        List<LeaderboardEntry> top = bids.findTopBids(auction, PageRequest.of(0, 3));
 
-        assertThat(top).containsExactly(new TopBid(dee.getId(), 140_000L), new TopBid(cat.getId(), 130_000L),
-                new TopBid(ann.getId(), 120_000L));
+        assertThat(top).containsExactly(new LeaderboardEntry(dee.getId(), 140_000L), new LeaderboardEntry(cat.getId(), 130_000L),
+                new LeaderboardEntry(ann.getId(), 120_000L));
         assertThat(bids.findTopBids(auction, PageRequest.of(0, 10))).hasSize(4);
     }
 
@@ -66,9 +66,9 @@ class BidTopBidsTest extends PostgresIntegrationTest {
         bid(mine, eve, 100_000);
         bid(other, bidder("Fay"), 900_000);
 
-        List<TopBid> top = bids.findTopBids(mine, PageRequest.of(0, 10));
+        List<LeaderboardEntry> top = bids.findTopBids(mine, PageRequest.of(0, 10));
 
-        assertThat(top).containsExactly(new TopBid(eve.getId(), 100_000L));
+        assertThat(top).containsExactly(new LeaderboardEntry(eve.getId(), 100_000L));
     }
 
     @Test

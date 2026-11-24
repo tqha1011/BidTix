@@ -60,6 +60,12 @@ seat-hold or payment flow).
 > auction row refuses an obviously bad bid, then one conditional `UPDATE` (`AuctionRepository.placeBid`) decides status, end time and minimum
 > price, moves price, leader and bid count, and extends `ends_at` inside the anti-sniping window; its row count is checked. It needs an
 > `Idempotency-Key` header (see **Idempotency**).
+> `GET /api/v1/auctions/{auctionPublicId}/leaderboard` (any logged-in user, `LeaderboardService`) lists the top bidders (`bidtix.leaderboard.top-n`, default 10),
+> highest bid first, each once with their highest bid and their name. The list is a Redis ZSET per auction (`auction:leaderboard:{publicId}`, member = bidder id,
+> score = highest bid, `AuctionLeaderBoard`; short TTL, default 60 s). A read that finds nothing in Redis for an auction that has bids rebuilds it from the
+> database (`BidRepository.findTopBids`, which reads every bid of the auction) with `ZADD GT`; a committed bid (`BidPlacedEvent`, `@TransactionalEventListener(AFTER_COMMIT)`)
+> raises that bidder's score only when the ZSET already exists (a Lua script), because a ZSET made of one bidder would look complete and never be rebuilt. Redis down:
+> reads fall back to the database and writes are ignored (fail-open).
 > Not started: event cancel and update, auction cancel, real payment provider and webhooks. Rate limits exist for login, register and logged-in callers; the other public routes need
 > `@RateLimited` when they are added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
@@ -213,8 +219,8 @@ ticket list (auth uses `dtos/`). New code follows the layer list above; move `dt
   when a real query needs them; see "Deferred" in `docs/database-schema.md`.
 
 **Consistency & concurrency**
-- PostgreSQL is the source of truth. Redis may only hold cache, fast-reject gates, and rate-limit
-  counters; it must never be the only record of money, tickets or bids.
+- PostgreSQL is the source of truth. Redis may only hold cache, fast-reject gates, rate-limit
+  counters and the auction leaderboard cache; it must never be the only record of money, tickets or bids.
 - State transitions use a conditional update (`UPDATE ... WHERE id = ? AND status = ?`) or optimistic
   locking (`@Version`), and the code **must check the affected row count**.
 - Lock/update multiple rows in ascending `id` order to avoid deadlocks.

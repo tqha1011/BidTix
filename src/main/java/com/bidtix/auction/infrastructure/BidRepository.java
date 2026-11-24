@@ -1,6 +1,7 @@
 package com.bidtix.auction.infrastructure;
 
 import com.bidtix.auction.domain.Bid;
+import com.bidtix.auction.domain.LeaderboardEntry;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.CrudRepository;
@@ -23,10 +24,6 @@ public interface BidRepository extends CrudRepository<Bid, Long> {
             nativeQuery = true)
     Optional<Bid> findBestBidWithoutOffer(@Param("auctionId") Long auctionId);
 
-    /** A bidder (users.id) and their highest bid in one auction. */
-    record TopBid(Long bidderId, Long amount) {
-    }
-
     /**
      * The bidders of one auction, highest bid first, each counted once with their highest bid. {@code Pageable} sets how
      * many ({@code PageRequest.of(0, 10)} is the top 10). No two bids of an auction have the same amount
@@ -42,5 +39,5 @@ public interface BidRepository extends CrudRepository<Bid, Long> {
              group by b.bidderId
              order by max(b.amount) desc
             """)
-    List<TopBid> findTopBids(@Param("auctionPublicId") UUID auctionPublicId, Pageable pageable);
+    List<LeaderboardEntry> findTopBids(@Param("auctionPublicId") UUID auctionPublicId, Pageable pageable);
 }
