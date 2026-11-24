@@ -51,6 +51,11 @@ public interface PayableOrders {
      * <p>
      * If a reserved seat is no longer held by the order, it throws {@code BusinessException(ORDER_NOT_PAYABLE)} instead, and
      * the transaction must roll back; the caller then treats the payment as {@link Applied#NOT_PAYABLE} in a new transaction.
+     *
+     * @param paidAt when the CUSTOMER paid (for VNPAY, {@code vnp_PayDate}, which is covered by the callback's signature), not
+     *               when the server got round to processing the callback. An auction offer is only accepted if its deadline is after
+     *               this moment, so a callback that arrives late (the provider retries for up to 50 minutes) does not make a
+     *               customer who paid in time lose the ticket.
      */
     Applied applyPayment(Long orderId, Instant paidAt);
 }
