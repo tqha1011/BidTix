@@ -10,6 +10,7 @@ import org.springframework.data.repository.query.Param;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 public interface OrderRepository extends JpaRepository<Order, Long> {
 
@@ -81,4 +82,10 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     /** Read from the database (a scalar query), so it sees an update made earlier in the same transaction. */
     @Query("select o.status from Order o where o.id = :orderId")
     Optional<OrderStatus> findStatusById(@Param("orderId") Long orderId);
+
+
+    @Query("select o from Order o " +
+            "join User u on o.userId = u.id " +
+            "where o.orderCode = :orderCode and u.publicId = :userPublicId")
+    Optional<Order> findByOrderCodeAndUserId(String orderCode, UUID userPublicId);
 }

@@ -14,7 +14,6 @@ import com.bidtix.booking.dtos.BookingTicketSeatsResult.TicketSeatsInfo;
 import com.bidtix.booking.infrastructure.BookingGateway;
 import com.bidtix.booking.infrastructure.BookingProperties;
 import com.bidtix.booking.infrastructure.OrderRepository;
-import com.bidtix.booking.infrastructure.TicketRepository;
 import com.bidtix.common.utils.GenerateOrderCode;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
@@ -42,7 +41,7 @@ import java.util.stream.Collectors;
 public class BookingService {
     private final EventRepository eventRepository;
     private final OrderRepository orderRepository;
-    private final TicketRepository ticketRepository;
+    private final TicketIssuer ticketIssuer;
     private final TicketZoneRepository ticketZoneRepository;
     private final UserRepository userRepository;
     private final SeatRepository seatRepository;
@@ -163,16 +162,8 @@ public class BookingService {
         List<OrderItem> items = order.getItems();
         List<Long> seatIds = items.stream().map(OrderItem::getSeatId).filter(Objects::nonNull).toList();
 
-        // The seats must still be held by this order; the row count proves it.
-        int soldCount = seatRepository.markSeatsSoldByOrderId(order.getId());
-        if (soldCount != seatIds.size()) {
-            throw new BusinessException(ErrorCode.ORDER_NOT_PAYABLE, "Seat hold is no longer valid");
-        }
-
-        var tickets = items.stream()
-                .map(item -> new Ticket(item, order.getEventId(), order.getUserId()))
-                .toList();
-        ticketRepository.saveAllAndFlush(tickets);
+        // seats HELD -> SOLD (the row count is checked there) and one ticket per seat
+        var tickets = ticketIssuer.issueForSeats(order);
 
         Map<Long, Seat> seatsById = seatRepository.findAllById(seatIds).stream()
                 .collect(Collectors.toMap(Seat::getId, Function.identity()));
@@ -195,11 +186,7 @@ public class BookingService {
      * unit, all pointing at the same order item (each person at the door needs their own QR code).
      */
     private BookingTicketQuantityResult completeQuantity(Order order, BookingTicketQuantityResult pending) {
-        var tickets = order.getItems().stream()
-                .flatMap(item -> java.util.stream.IntStream.range(0, item.getQuantity())
-                        .mapToObj(i -> new Ticket(item, order.getEventId(), order.getUserId())))
-                .toList();
-        ticketRepository.saveAllAndFlush(tickets);
+        var tickets = ticketIssuer.issueForQuantity(order);
 
         List<TicketQuantityInfo> ticketInfos = tickets.stream()
                 .map(ticket -> new TicketQuantityInfo(ticket.getPublicId()))
