@@ -1,7 +1,7 @@
 package com.bidtix.auction.infrastructure;
 
 import com.bidtix.auction.domain.Bid;
-import com.bidtix.auction.dtos.Entry;
+import com.bidtix.auction.domain.LeaderboardEntry;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.CrudRepository;
@@ -39,5 +39,5 @@ public interface BidRepository extends CrudRepository<Bid, Long> {
              group by b.bidderId
              order by max(b.amount) desc
             """)
-    List<Entry> findTopBids(@Param("auctionPublicId") UUID auctionPublicId, Pageable pageable);
+    List<LeaderboardEntry> findTopBids(@Param("auctionPublicId") UUID auctionPublicId, Pageable pageable);
 }
