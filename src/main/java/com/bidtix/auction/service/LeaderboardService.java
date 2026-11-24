@@ -1,6 +1,7 @@
 package com.bidtix.auction.service;
 
-import com.bidtix.auction.dtos.Entry;
+import com.bidtix.auction.domain.Auction;
+import com.bidtix.auction.domain.LeaderboardEntry;
 import com.bidtix.auction.dtos.LeaderboardEntryResponse;
 import com.bidtix.auction.infrastructure.AuctionLeaderBoard;
 import com.bidtix.auction.infrastructure.AuctionRepository;
@@ -35,8 +36,8 @@ public class LeaderboardService {
         var auction = auctionRepository.findByPublicId(auctionPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.AUCTION_NOT_FOUND));
 
-        var leaderboard = buildLeaderboard(auctionPublicId, topN);
-        var bidderNameMap = findUsernamesAndConvertToHashMap(leaderboard.stream().map(Entry::bidderId).toList());
+        var leaderboard = buildLeaderboard(auctionPublicId, topN, auction);
+        var bidderNameMap = findUsernamesAndConvertToHashMap(leaderboard.stream().map(LeaderboardEntry::bidderId).toList());
 
         return IntStream.range(0, leaderboard.size())
                 .mapToObj(i -> {
@@ -56,14 +57,14 @@ public class LeaderboardService {
                 .collect(Collectors.toMap(UserRepository.UserName::id, UserRepository.UserName::fullName));
     }
 
-    private List<Entry> buildLeaderboard(UUID auctionPublicId, int topN){
-        var leaderboard = auctionLeaderBoard.getLeaderboard(auctionPublicId);
-        List<Entry> rebuildLeaderboard;
-        if(leaderboard == null || leaderboard.isEmpty()) {
+    private List<LeaderboardEntry> buildLeaderboard(UUID auctionPublicId, int topN, Auction auction){
+        var redisLeaderboard = auctionLeaderBoard.getLeaderboard(auctionPublicId);
+        List<LeaderboardEntry> rebuildLeaderboard;
+        if(redisLeaderboard == null || (redisLeaderboard.isEmpty() && auction.getBidCount() > 0)) {
             rebuildLeaderboard = bidRepository.findTopBids(auctionPublicId, PageRequest.of(0, topN));
             auctionLeaderBoard.setLeaderboard(auctionPublicId, rebuildLeaderboard);
         } else {
-            rebuildLeaderboard = leaderboard;
+            rebuildLeaderboard = redisLeaderboard;
         }
         return rebuildLeaderboard;
     }
