@@ -24,6 +24,7 @@ Version numbers are global across modules, so a new migration always takes the n
 | V12 | `event` | `seats.public_id` |
 | V13 | `event` | `venues.public_id` |
 | V14 | `event` | index `idx_events_status_starts_at (status, starts_at)` for the public event list |
+| V15 | `payment` | `payments.txn_ref` (our reference per attempt, `UNIQUE (provider, txn_ref)`), provider `VNPAY`, status `REFUND_PENDING`, `ux_payments_one_succeeded_per_order` |
 
 ## Conventions
 
@@ -78,6 +79,11 @@ users ──< idempotency_keys
 
 **payment**
 - `UNIQUE (provider, provider_txn_id)`: a provider transaction maps to at most one payment.
+- An order can have several payments (one per attempt after a failed or abandoned one). Each has its own `txn_ref`
+  (VNPAY's `vnp_TxnRef`, unique per provider), which the provider's callback uses to name the payment.
+  `provider_txn_id` is the provider's own number, set when it confirms.
+- `ux_payments_one_succeeded_per_order` (V15): at most one `SUCCEEDED` payment per order. A second confirmed payment for
+  the same order is stored as `REFUND_PENDING`, as is one that arrives after the order expired or was cancelled.
 - `payment_webhook_events` is an inbox. The webhook inserts first, and a duplicate delivery violates
   `UNIQUE (provider, provider_event_id)`, so it is acknowledged with `200` and not processed again.
 - A successful payment for an order that is already `EXPIRED` is refunded, not applied, because the
