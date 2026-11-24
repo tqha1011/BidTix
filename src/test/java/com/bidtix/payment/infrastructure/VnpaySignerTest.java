@@ -26,7 +26,7 @@ class VnpaySignerTest {
     private static VnpayProperties properties(String tmnCode, String secret) {
         return new VnpayProperties(tmnCode, secret, "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html",
                 "http://localhost:8080/api/v1/payments/vnpay/return", "http://localhost:8080/api/v1/payments/vnpay/ipn",
-                "2.1.0", 15);
+                "2.1.0","pay" ,15);
     }
 
     private static Map<String, String> params() {

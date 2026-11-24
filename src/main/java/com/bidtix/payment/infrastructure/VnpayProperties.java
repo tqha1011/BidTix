@@ -23,5 +23,6 @@ public record VnpayProperties(
         @DefaultValue("http://localhost:8080/api/v1/payments/vnpay/return") String returnUrl,
         @DefaultValue("http://localhost:8080/api/v1/payments/vnpay/ipn") String ipnUrl,
         @DefaultValue("2.1.0") String version,
+        @DefaultValue("pay") String command,
         @DefaultValue("15") int expireMinutes) {
 }
