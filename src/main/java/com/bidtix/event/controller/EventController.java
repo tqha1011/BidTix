@@ -4,6 +4,7 @@ import com.bidtix.common.dtos.PageResponse;
 import com.bidtix.config.security.CurrentUser;
 import com.bidtix.event.dtos.CreateEventRequest;
 import com.bidtix.event.dtos.CreateZoneRequest;
+import com.bidtix.event.dtos.EventDetailResponse;
 import com.bidtix.event.dtos.EventResponse;
 import com.bidtix.event.dtos.ZoneResponse;
 import com.bidtix.event.service.EventService;
@@ -59,6 +60,15 @@ public class EventController {
     @PreAuthorize("hasRole('ORGANIZER')")
     public EventResponse publish(@PathVariable UUID eventPublicId, Principal principal) {
         return eventService.publish(CurrentUser.publicId(principal), eventPublicId);
+    }
+
+    /**
+     * One event with its zones, their prices and what is left. Published events for any logged-in user, a draft only for
+     * its organizer (404 {@code EVENT_NOTFOUND} for anybody else).
+     */
+    @GetMapping("/{eventPublicId}")
+    public EventDetailResponse detail(@PathVariable UUID eventPublicId, Principal principal) {
+        return eventService.getDetail(CurrentUser.publicId(principal), eventPublicId);
     }
 
     /** Published events that have not started yet, soonest first. Any logged-in user. */

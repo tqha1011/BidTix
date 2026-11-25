@@ -90,6 +90,17 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
             "where s.id = :seatId and s.status = SeatStatus.RESERVED_FOR_AUCTION")
     int updateAuctionSeatSold(@Param("seatId") Long seatId, @Param("now") Instant now);
 
+    /** How many seats are free in each zone of the event; a zone with none has no row. One query for the whole event. */
+    @Query("select s.zone.id as zoneId, count(s) as available from Seat s " +
+            "where s.zone.event.id = :eventId and s.status = 'AVAILABLE' group by s.zone.id")
+    List<ZoneSeats> countAvailableByEventId(Long eventId);
+
+    interface ZoneSeats {
+        Long getZoneId();
+
+        long getAvailable();
+    }
+
     interface HeldSeat {
         UUID getSeatPublicId();
 

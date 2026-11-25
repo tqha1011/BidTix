@@ -5,6 +5,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -13,6 +14,9 @@ public interface TicketZoneRepository extends JpaRepository<TicketZone, Long> {
     Optional<TicketZone> findByPublicId(UUID publicId);
 
     boolean existsByEventId(Long eventId);
+
+    /** The zones of an event, in the order they were created. */
+    List<TicketZone> findByEventIdOrderById(Long eventId);
 
     /**
      * Takes {@code quantity} tickets from a general-admission zone, but only if that many are left. The

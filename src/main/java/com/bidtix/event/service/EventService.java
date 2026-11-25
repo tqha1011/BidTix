@@ -8,8 +8,11 @@ import com.bidtix.event.domain.Event;
 import com.bidtix.event.domain.EventStatus;
 import com.bidtix.event.domain.Venue;
 import com.bidtix.event.dtos.CreateEventRequest;
+import com.bidtix.event.dtos.EventDetailResponse;
+import com.bidtix.event.dtos.ZoneAvailabilityResponse;
 import com.bidtix.event.dtos.EventResponse;
 import com.bidtix.event.infrastructure.EventRepository;
+import com.bidtix.event.infrastructure.SeatRepository;
 import com.bidtix.event.infrastructure.TicketZoneRepository;
 import com.bidtix.event.infrastructure.VenueRepository;
 import com.bidtix.user.domain.User;
@@ -23,7 +26,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -37,6 +43,7 @@ public class EventService {
     private final EventRepository eventRepository;
     private final TicketZoneRepository ticketZoneRepository;
     private final VenueRepository venueRepository;
+    private final SeatRepository seatRepository;
     private final Clock clock;
     // Known exception to the module rules (same as auth): the user module has no service yet.
     private final UserRepository userRepository;
@@ -58,6 +65,36 @@ public class EventService {
                 request.description(), request.startsAt(), request.endsAt(),
                 request.saleStartsAt(), request.saleEndsAt(), maxTickets));
         return EventResponse.from(event);
+    }
+
+    /**
+     * One event with its zones and what is left in each. A published event is open to every logged-in user; any other
+     * status only to its organizer, and looks "not found" to everybody else. Not cached: availability changes with every
+     * booking.
+     */
+    @Transactional(readOnly = true)
+    public EventDetailResponse getDetail(UUID callerPublicId, UUID eventPublicId) {
+        Event event = findVisibleEvent(callerPublicId, eventPublicId);
+
+        Map<Long, Long> freeSeats = seatRepository.countAvailableByEventId(event.getId()).stream()
+                .collect(Collectors.toMap(SeatRepository.ZoneSeats::getZoneId, SeatRepository.ZoneSeats::getAvailable));
+        List<ZoneAvailabilityResponse> zones = ticketZoneRepository.findByEventIdOrderById(event.getId()).stream()
+                .map(zone -> ZoneAvailabilityResponse.from(zone, zone.getAvailableQuantity() != null
+                        ? zone.getAvailableQuantity()
+                        : freeSeats.getOrDefault(zone.getId(), 0L).intValue()))
+                .toList();
+        return new EventDetailResponse(EventResponse.from(event), zones);
+    }
+
+    /** The event if the caller may see it: published, or their own. Call it inside a transaction. */
+    private Event findVisibleEvent(UUID callerPublicId, UUID eventPublicId) {
+        Event event = eventRepository.findByPublicId(eventPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
+        if (event.getStatus() != EventStatus.PUBLISHED && !userRepository.findByPublicId(callerPublicId)
+                .map(user -> user.getId().equals(event.getOrganizerId())).orElse(false)) {
+            throw new BusinessException(ErrorCode.EVENT_NOTFOUND);
+        }
+        return event;
     }
 
     /**
