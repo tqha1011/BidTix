@@ -26,7 +26,7 @@ and caching that never decides who gets a ticket.
 > management and browsing, booking of numbered seats and standing zones (with a Redis gate that refuses known
 > sold-out requests early and a job that returns the stock of unpaid orders), auctions (bidding, closing,
 > second-chance offers, leaderboard), idempotent retries, and VNPAY payments confirmed by its callback. Still
-> missing: verifying refunds against the VNPAY sandbox and the payment return page. See [Roadmap](#roadmap).
+> missing: verifying refunds against the VNPAY sandbox, cancelling an event, a per-user ticket limit and check-in. See [Roadmap](#roadmap).
 
 ## What it demonstrates
 
@@ -138,7 +138,23 @@ Management endpoints (Bearer token with the right role, otherwise `403` with `co
 | `POST /api/v1/events/{eventPublicId}/publish` | ORGANIZER (owner) | `200`, `DRAFT` to `PUBLISHED`; needs at least one zone; evicts the cached event pages |
 | `GET /api/v1/admin/events/{eventPublicId}/tickets?status=&page=&size=` | ADMIN | `200`, paginated issued tickets (size capped at 100) |
 
-Read endpoints for any logged-in user (cached in Redis with a short TTL):
+Managing what exists (same `403` rule):
+
+| Endpoint | Role | Result |
+|---|---|---|
+| `GET /api/v1/events/mine` | ORGANIZER | own events, drafts included |
+| `PUT /api/v1/events/{eventPublicId}` | ORGANIZER (owner) | a draft entirely, a published event only title and description |
+| `DELETE /api/v1/events/{eventPublicId}` | ORGANIZER (owner) | `204` for a draft without orders, else `409` |
+| `PUT` / `DELETE /api/v1/events/{eventPublicId}/zones/{zonePublicId}` | ORGANIZER (owner) | drafts only |
+| `PUT` / `DELETE /api/v1/venues/{venuePublicId}` | ADMIN | `409 VENUE_IN_USE` when deleting a used venue |
+| `POST /api/v1/auctions/{auctionPublicId}/cancel` | ORGANIZER (owner) | only while nobody has bid; the ticket goes back on sale |
+
+A customer's own data (CUSTOMER): `GET /api/v1/orders`, `GET /api/v1/orders/{orderCode}`, `GET /api/v1/tickets`.
+
+Reading, for any logged-in user: `GET /api/v1/events/{eventPublicId}` (zones, prices, what is left),
+`GET /api/v1/events/{eventPublicId}/zones/{zonePublicId}/seats`, `GET /api/v1/venues`, `GET /api/v1/auctions`,
+`GET /api/v1/auctions/{auctionPublicId}`, `.../bids` and `.../leaderboard`. Two of the reads are cached in Redis with a
+short TTL:
 
 | Endpoint | Result |
 |---|---|
@@ -228,9 +244,11 @@ Method, numbers and caveats: [`docs/benchmarks.md`](docs/benchmarks.md).
 - [x] Idempotency-Key filter
 - [x] VNPAY: payment URL and idempotent callback, with every authentic callback stored
 - [x] VNPAY: refund job for paid orders that cannot be fulfilled, outcome confirmed with querydr (tested against a stand-in)
-- [ ] VNPAY: refunds verified on the sandbox, return page
+- [x] VNPAY return page
+- [ ] VNPAY: refunds verified on the sandbox
 - [x] Auctions: bidding, anti-sniping, closing job, second-chance offers, leaderboard
-- [ ] Event cancel and update (must evict the event cache and clear the gate flags)
+- [x] Reading events, seat maps, orders, tickets and auctions; managing events, zones, venues; cancelling unbid auctions
+- [ ] Event cancel (must evict the event cache, clear the gate flags and refund)
 - [x] Concurrency tests for bids and payment callbacks
 - [ ] Observability: expose a secured `/actuator/prometheus` (only `health` is exposed today)
 

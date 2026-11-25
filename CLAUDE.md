@@ -47,7 +47,18 @@ seat-hold or payment flow).
 > zone), `GET /admin/events/{id}/tickets` (ADMIN). Any logged-in user can read `GET /venues/{publicId}` and
 > `GET /events?page=&size=` (published events that have not started, soonest first); both are cached in Redis with
 > a short TTL, and publishing evicts the event pages. Only CUSTOMERs can register, so ADMIN/ORGANIZER users must be
-> inserted by SQL for now. `POST /api/v1/auctions` (ORGANIZER, owner of a PUBLISHED event) creates a SCHEDULED auction for
+> inserted by SQL for now.
+> Reading for buyers: `GET /events/{id}` (event with zones and what is left in each) and
+> `GET /events/{id}/zones/{zoneId}/seats` (seat map; a draft is visible to its organizer only, 404 for others; neither is
+> cached), `GET /orders`, `GET /orders/{code}` and `GET /tickets` (CUSTOMER, own rows only).
+> Managing: `GET /events/mine` (ORGANIZER, drafts included); `PUT /events/{id}` (a draft entirely, a published event only
+> title and description; evicts the event pages); `DELETE /events/{id}` and `PUT`/`DELETE /events/{id}/zones/{zoneId}`
+> (drafts only, refused once there are orders; a standing zone never shrinks below what is taken). Creating, changing and
+> removing zones, deleting and publishing lock the event row (`findByPublicIdForUpdate`). `GET /venues` (logged in),
+> `PUT`/`DELETE /venues/{id}` (ADMIN; `VENUE_IN_USE` while an event uses it; both evict `CacheConfig.VENUES`).
+> `GET /auctions/{id}`, `GET /auctions/{id}/bids` (history with bidder names), and `POST /auctions/{id}/cancel`
+> (ORGANIZER, owner; only SCHEDULED or LIVE without bids, one conditional UPDATE, ticket back on sale).
+> `POST /api/v1/auctions` (ORGANIZER, owner of a PUBLISHED event) creates a SCHEDULED auction for
 > one seat or one standing ticket and takes that ticket out of sale in the same transaction (`AuctionService.createAuction`);
 > `GET /api/v1/auctions?status=&eventPublicId=&page=&size=` (any logged-in user) lists auctions soonest ending first, open ones (SCHEDULED, LIVE) by default, with the public ids of the auction, event, zone and seat; it is not cached because price and bid count change on every bid. `AuctionActivationJob` (every 5 s) opens it, SCHEDULED to LIVE, once `starts_at` has passed (one conditional UPDATE with
 > `FOR UPDATE SKIP LOCKED`; there is no manual "start" endpoint, so a bid is only accepted on a LIVE auction).
@@ -68,9 +79,11 @@ seat-hold or payment flow).
 > database (`BidRepository.findTopBids`, which reads every bid of the auction) with `ZADD GT`; a committed bid (`BidPlacedEvent`, `@TransactionalEventListener(AFTER_COMMIT)`)
 > raises that bidder's score only when the ZSET already exists (a Lua script), because a ZSET made of one bidder would look complete and never be rebuilt. Redis down:
 > reads fall back to the database and writes are ignored (fail-open).
-> Not started: event cancel and update, auction cancel, the VNPAY return URL endpoint, and querying VNPAY for payments left
-> PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
-> logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
+> `GET /api/v1/payments/vnpay/return` (public, signed, rate limit `vnpay-return`) shows the state of a payment and changes
+> nothing.
+> Not started: cancelling an event, enforcing `max_tickets_per_user`, refusing bookings of an event that is not PUBLISHED or
+> outside its sale window, ticket check-in, and querying VNPAY for payments left PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
+> logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
 
 **Entity mapping conventions**
@@ -168,8 +181,8 @@ The module sees orders only through `PayableOrders`, which `booking` implements 
    VNPAY retries unless it gets `00` or `02`. The answer is `TransactionResponse` (`RspCode`, `Message`), never a
    `ProblemDetail` once the request reaches the service.
 
-Refunds (`payment/infrastructure/RefundPaymentJob`, `bidtix.payment.refund-cron`; `-` turns it off, which
-`application.yaml` does for now, until VNPAY's sandbox answers the refund API, and `PostgresIntegrationTest` always does): batches of `REFUND_PENDING` payments are locked (`SKIP LOCKED`) and claimed with
+Refunds (`payment/infrastructure/RefundPaymentJob`, `bidtix.payment.refund-cron`, every minute in `application.yaml`; `-` turns it off, which
+`PostgresIntegrationTest` does): batches of `REFUND_PENDING` payments are locked (`SKIP LOCKED`) and claimed with
 `markRefundRequested` (1 row = yours), committed, then VNPAY is called outside any transaction. The claim is given back
 (`releaseRefundClaim`) only when the request certainly never reached VNPAY (it could not be built, or no connection was
 made): retried after 1, 5, then 30 minutes, 5 attempts in all. A read timeout, a broken connection, an HTTP error or any
@@ -183,7 +196,7 @@ never gives the refund claim back.
 
 Rules for changing it: the payment's conditional `UPDATE` (row count checked) is the guard against processing twice, never
 the stored event; no refund or other VNPAY call inside the request's transaction; only the IPN confirms a payment, never the
-return URL. Open points: refunds not yet verified on the sandbox, return URL endpoint, nothing scans events with `processed_at IS NULL` or asks VNPAY
+return URL. Open points: refunds not yet verified on the sandbox, nothing scans events with `processed_at IS NULL` or asks VNPAY
 about payments left `PENDING`.
 
 ## Architecture
