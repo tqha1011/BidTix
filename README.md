@@ -249,6 +249,21 @@ make bench-gate     # the booking gate on the real booking flow, on and off
 make bench-cancel   # cancelling unpaid orders, 1 vs many orders per transaction
 ```
 
+The whole application can be load tested over HTTP with k6 (`Dockerfile` and `loadtest/`):
+
+```bash
+make load-test      # requests per second and users at once, with p95 < 500 ms and < 1% failures
+make sale-day       # 30 minutes of people logging in, buying, paying and bidding, then 15 data checks
+```
+
+With the application and PostgreSQL limited to 2 CPUs each on one laptop, it held 600 requests/s of 90% reads and 10%
+bookings (p95 11 ms), 200 bookings/s once warm (p95 27 ms) and 1,000 users at once (p95 239 ms), with no failed
+request. A just-started instance carries much less until the JVM has warmed up.
+
+In a 30-minute simulated sale (up to 1,000 shoppers and 150 bidders, 259,006 requests), p95 stayed between 7 and 24 ms
+outside the first minute and the 380 ms minute in which the sale opened; the only 41 failed requests came in the first
+minute, right after start-up, and every data check passed.
+
 Method, numbers and caveats: [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Documentation
@@ -260,7 +275,7 @@ Method, numbers and caveats: [`docs/benchmarks.md`](docs/benchmarks.md).
   - [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md): take standing-zone stock with a conditional UPDATE
   - [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md): refuse known sold-out requests with a short-lived Redis flag
   - [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md): confirm VNPAY payments in the IPN callback
-- [`docs/benchmarks.md`](docs/benchmarks.md): anti-overselling strategies, the booking gate and order cancellation, measured
+- [`docs/benchmarks.md`](docs/benchmarks.md): anti-overselling strategies, the booking gate, order cancellation and the load test, measured
 - [`CLAUDE.md`](CLAUDE.md): conventions and rules for working in this repository
 
 ## Roadmap

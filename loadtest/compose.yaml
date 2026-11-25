@@ -1,0 +1,66 @@
+# The stack the load test runs against (loadtest/run.sh). Separate from ../compose.yaml: its own project, a fresh
+# database on every reset, fixed CPU and memory, and no ports published (k6 calls the app container's address).
+# Every password here is for this throwaway stack only.
+name: bidtix-loadtest
+
+services:
+  database:
+    image: postgres:17.11-alpine
+    # only logging differs from the defaults, so that a stall can be explained afterwards
+    command: [ "postgres", "-c", "log_checkpoints=on", "-c", "log_lock_waits=on", "-c", "log_min_duration_statement=1000",
+               "-c", "log_autovacuum_min_duration=1000" ]
+    environment:
+      POSTGRES_DB: bidtix
+      POSTGRES_USER: bidtix
+      POSTGRES_PASSWORD: loadtest
+    cpus: ${DB_CPUS:-2}
+    mem_limit: 1g
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -h 127.0.0.1 -U bidtix -d bidtix" ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  cache:
+    image: redis:8.6.1-alpine
+    command: [ "redis-server", "--requirepass", "loadtest" ]
+    cpus: 1
+    mem_limit: 256m
+    healthcheck:
+      test: [ "CMD-SHELL", "REDISCLI_AUTH=loadtest redis-cli ping | grep -q PONG" ]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  app:
+    image: bidtix-backend:loadtest
+    build:
+      context: ..
+    cpus: ${APP_CPUS:-2}
+    # below about 1.8 GB the JVM would pick the serial garbage collector
+    mem_limit: 2g
+    depends_on:
+      database:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    volumes:
+      # throwaway keys made by tokens.sh, so that it can sign the users' access tokens itself
+      - ../target/loadtest/keys:/keys:ro
+    environment:
+      # one line per garbage collection in the container log
+      JAVA_TOOL_OPTIONS: -Xlog:gc
+      JWT_PUBLIC_KEY: file:/keys/public.pem
+      JWT_PRIVATE_KEY: file:/keys/private.pem
+      SPRING_DATASOURCE_URL: jdbc:postgresql://database:5432/bidtix
+      SPRING_DATASOURCE_USERNAME: bidtix
+      SPRING_DATASOURCE_PASSWORD: loadtest
+      # the application's default is 10; POOL=30 loadtest/run.sh ... measures another size
+      SPRING_DATASOURCE_HIKARI_MAXIMUMPOOLSIZE: ${POOL:-10}
+      SPRING_DATA_REDIS_HOST: cache
+      REDIS_PASSWORD: loadtest
+      # The rate limiter stays on, so every request still pays for its Redis call, but nobody is refused.
+      # The refund job is off: nothing here may ever call VNPAY.
+      SPRING_APPLICATION_JSON: >-
+        {"bidtix": {"payment": {"refund-cron": "-"},
+         "rate-limit": {"policies": {"default-user": {"capacity": 1000000, "refill-tokens": 1000000, "refill-every": "1s"}}}}}
