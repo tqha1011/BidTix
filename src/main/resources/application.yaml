@@ -100,3 +100,5 @@ bidtix:
       # VNPAY's IPN, per IP: all of VNPAY's calls come from a few addresses, so the limit is wide. Fail-open, because the
       # signature is what protects the route and a payment must still be confirmed while Redis is down.
       vnpay-ipn:     { algorithm: token-bucket, capacity: 100, refill-tokens: 20, refill-every: 1s, fail-open: true }
+      # the page a customer's browser comes back to, per IP: it only reads
+      vnpay-return:  { algorithm: token-bucket, capacity: 20, refill-tokens: 5, refill-every: 1s, fail-open: true }

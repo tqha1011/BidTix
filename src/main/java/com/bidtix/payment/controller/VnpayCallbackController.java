@@ -1,6 +1,7 @@
 package com.bidtix.payment.controller;
 
 import com.bidtix.config.ratelimit.RateLimited;
+import com.bidtix.payment.dtos.PaymentReturnResponse;
 import com.bidtix.payment.dtos.TransactionResponse;
 import com.bidtix.payment.dtos.VnPayResponse;
 import com.bidtix.payment.service.PaymentService;
@@ -36,6 +37,17 @@ public class VnpayCallbackController {
     @RateLimited(policy = "vnpay-ipn")
     public TransactionResponse ipn(@RequestParam Map<String, String> params, VnPayResponse response) {
         return paymentService.processVnPayResponse(params, response);
+    }
+
+    /**
+     * Where VNPAY sends the customer's browser back ({@code vnp_ReturnUrl}). Shows the order and the state of the
+     * payment and changes nothing (see {@link PaymentService#readReturn}). 400 for a wrong signature, 404 for an unknown
+     * payment, 429 above the rate limit.
+     */
+    @GetMapping("/return")
+    @RateLimited(policy = "vnpay-return")
+    public PaymentReturnResponse back(@RequestParam Map<String, String> params, VnPayResponse response) {
+        return paymentService.readReturn(params, response);
     }
 
 

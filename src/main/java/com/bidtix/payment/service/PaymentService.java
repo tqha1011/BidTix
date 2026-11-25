@@ -5,6 +5,7 @@ import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.payment.domain.Payment;
 import com.bidtix.payment.domain.PaymentProvider;
 import com.bidtix.payment.domain.PaymentStatus;
+import com.bidtix.payment.dtos.PaymentReturnResponse;
 import com.bidtix.payment.dtos.TransactionResponse;
 import com.bidtix.payment.dtos.VnPayResponse;
 import com.bidtix.payment.infrastructure.PaymentRepository;
@@ -144,6 +145,24 @@ public class PaymentService {
             log.error("Could not process the VNPAY confirmation of payment {}", response.txnRef(), e);
             return TransactionResponse.create("99", "Unknown error");
         }
+    }
+
+    /**
+     * Reads the state of a payment for the page the customer's browser comes back to. The parameters must carry VNPAY's
+     * signature, so only somebody who was sent there with them learns the order code. It changes nothing: the browser is
+     * not a trustworthy messenger, only {@link #processVnPayResponse} records a result.
+     */
+    @Transactional(readOnly = true)
+    public PaymentReturnResponse readReturn(Map<String, String> params, VnPayResponse response) {
+        if (!signer.verify(params)) {
+            throw new BusinessException(ErrorCode.INVALID_REQUEST, "Invalid signature");
+        }
+        Payment payment = paymentRepository.findByProviderAndTxnRef(PaymentProvider.VNPAY, response.txnRef())
+                .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
+        var order = payableOrders.findOrder(payment.getOrderId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
+        boolean paid = VNPAY_SUCCESS.equals(response.responseCode()) && VNPAY_SUCCESS.equals(response.transactionStatus());
+        return new PaymentReturnResponse(order.code(), payment.getAmount(), paid, payment.getStatus());
     }
 
     /** Its own transaction, committed before the processing starts. A repeated delivery adds nothing. */
