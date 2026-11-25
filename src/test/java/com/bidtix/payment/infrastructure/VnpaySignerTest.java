@@ -209,4 +209,75 @@ class VnpaySignerTest {
         p.put("vnp_SecureHash", EXPECTED_HASH);
         return p;
     }
+
+    // ---- querydr: like the refund API, with its own fields and order ----------------------------------
+
+    private static final String QUERY_REQUEST_HASH =
+            "4323053a8e814bb9a749b82abb1986674fc1e338bdc2a22c888297285068f9483fa6e040e62cb1f864a048cd513a808299b95d69bc1d8e135068aecbc1b32346";
+    private static final String QUERY_RESPONSE_HASH =
+            "f27ac771c44774a892cb769a8737bcc8714dee4a3676b29376ee850bd106b5b20b77375e30836aaf7ee67f2fe24e9d18f0e06f9efdf4bbace50797dd1e99b909";
+    private static final String QUERY_RESPONSE_HASH_WITHOUT_PROMOTION =
+            "c65715f8cce3be75c7c6ebed039a01b353a02f697b97ee8b98c412c63b1a2b553b4530b52545fd5acbe5e4168a0997bbfaef93b38e82f3e3c7206a05cf42be7c";
+
+    private static Map<String, String> queryResponse() {
+        Map<String, String> p = params();
+        p.clear();
+        p.put("vnp_ResponseId", "res0001");
+        p.put("vnp_Command", "querydr");
+        p.put("vnp_ResponseCode", "00");
+        p.put("vnp_Message", "QueryDR success");
+        p.put("vnp_TmnCode", "TESTCODE");
+        p.put("vnp_TxnRef", "ORD123-1");
+        p.put("vnp_Amount", "1000000");
+        p.put("vnp_BankCode", "NCB");
+        p.put("vnp_PayDate", "20260101103500");
+        p.put("vnp_TransactionNo", "14123456");
+        p.put("vnp_TransactionType", "01");
+        p.put("vnp_TransactionStatus", "00");
+        p.put("vnp_OrderInfo", "Thanh toan don hang ORD123");
+        p.put("vnp_PromotionCode", "PROMO1");
+        p.put("vnp_PromotionAmount", "5000");
+        p.put("vnp_SecureHash", QUERY_RESPONSE_HASH);
+        return p;
+    }
+
+    @Test
+    void aQueryRequestIsHashedOverItsOwnValuesInVnpaysOrder() {
+        Map<String, String> p = new HashMap<>();
+        p.put("vnp_RequestId", "req0001");
+        p.put("vnp_Version", "2.1.0");
+        p.put("vnp_Command", "querydr");
+        p.put("vnp_TmnCode", "TESTCODE");
+        p.put("vnp_TxnRef", "ORD123-1");
+        p.put("vnp_TransactionDate", "20260101103111");
+        p.put("vnp_CreateDate", "20260101110000");
+        p.put("vnp_IpAddr", "127.0.0.1");
+        p.put("vnp_OrderInfo", "Truy van giao dich ORD123");
+        p.put("vnp_Amount", "1000000");   // not a field of this request
+
+        assertThat(signer.queryRequestHash(p)).isEqualTo(QUERY_REQUEST_HASH);
+    }
+
+    @Test
+    void aQueryResponseSignedWithTheSecretIsAccepted_withOrWithoutAPromotion() {
+        Map<String, String> p = queryResponse();
+        assertThat(signer.verifyQueryResponse(p)).isTrue();
+
+        p.remove("vnp_PromotionCode");
+        p.remove("vnp_PromotionAmount");
+        p.put("vnp_SecureHash", QUERY_RESPONSE_HASH_WITHOUT_PROMOTION);
+        assertThat(signer.verifyQueryResponse(p)).isTrue();
+    }
+
+    @Test
+    void aChangedQueryResponseOrOneWithoutAHashIsRejected() {
+        Map<String, String> changed = queryResponse();
+        changed.put("vnp_PromotionAmount", "6000");
+        assertThat(signer.verifyQueryResponse(changed)).isFalse();
+        assertThat(signer.verifyRefundResponse(queryResponse())).as("the refund rule does not fit it").isFalse();
+
+        Map<String, String> unsigned = queryResponse();
+        unsigned.remove("vnp_SecureHash");
+        assertThat(signer.verifyQueryResponse(unsigned)).isFalse();
+    }
 }

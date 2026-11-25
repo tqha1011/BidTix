@@ -51,6 +51,10 @@ class RefundResponseHandlingTest extends PostgresIntegrationTest {
 
     @Test
     void anUnsignedSuccess_isIgnored() {
+        Payment unsigned = refundRequested(WHY);
+        assertThat(job.handleRefundResponse(new HashMap<>(Map.of("vnp_ResponseCode", "99")), unsigned))
+                .as("nothing to confirm").isFalse();
+
         Payment payment = refundRequested(WHY);
 
         job.handleRefundResponse(new HashMap<>(Map.of("vnp_ResponseCode", "00", "vnp_TransactionStatus", "05")), payment);
@@ -96,7 +100,7 @@ class RefundResponseHandlingTest extends PostgresIntegrationTest {
 
         job.handleRefundResponse(answer(payment, "00", "09"), payment);
 
-        assertThat(row(payment)).containsEntry("status", "REFUND_PENDING").containsEntry("version", 1L);
+        assertThat(row(payment)).containsEntry("status", "REFUND_PENDING");
         assertThat((String) row(payment).get("failure_reason")).startsWith(WHY).contains("rejected").contains("09");
         assertThat(row(payment).get("refund_requested_at")).as("not requested again by itself").isNotNull();
     }
@@ -130,6 +134,41 @@ class RefundResponseHandlingTest extends PostgresIntegrationTest {
         job.handleRefundResponse(answer(payment, "91", null), payment);
 
         assertThat(row(payment)).containsEntry("status", "REFUNDED").containsEntry("failure_reason", WHY);
+    }
+
+    // ---- when querydr is asked ---------------------------------------------------------------------
+
+    @Test
+    void onlyAnAcceptedRequest_isToBeConfirmed() {
+        // both the response code and the transaction status count; 94 means an earlier request is being processed
+        for (String[] accepted : new String[][]{{"00", "00"}, {"00", "05"}, {"00", "06"}, {"94", null}}) {
+            Payment payment = refundRequested(WHY);
+
+            assertThat(job.handleRefundResponse(answer(payment, accepted[0], accepted[1]), payment))
+                    .as(accepted[0] + "/" + accepted[1]).isTrue();
+            assertThat(row(payment)).containsEntry("status", "REFUND_PENDING");
+        }
+        for (String[] other : new String[][]{{"00", "09"}, {"00", "07"}, {"00", null}, {"91", "00"}, {"97", "05"}, {"99", "00"}}) {
+            Payment payment = refundRequested(WHY);
+
+            assertThat(job.handleRefundResponse(answer(payment, other[0], other[1]), payment))
+                    .as(other[0] + "/" + other[1]).isFalse();
+        }
+        Payment payment = refundRequested(WHY);
+        Map<String, String> changed = answer(payment, "00", "05");
+        changed.put("vnp_TransactionStatus", "00");
+        assertThat(job.handleRefundResponse(changed, payment)).as("wrong signature").isFalse();
+        assertThat(job.handleRefundResponse(answer(refundRequested(WHY), "00", "05"), payment)).as("another payment").isFalse();
+    }
+
+    @Test
+    void aRejectedRefund_isNotAskedAboutAgain() {
+        Payment payment = refundRequested(WHY);
+
+        job.handleRefundResponse(answer(payment, "00", "09"), payment);
+
+        assertThat(jdbc.queryForObject("select refund_queries from payments where id = ?", Integer.class, payment.getId()))
+                .isEqualTo(RefundPaymentJob.MAX_REFUND_QUERIES);
     }
 
     // ---- helpers ---------------------------------------------------------------------------------

@@ -93,4 +93,37 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             "set p.status = PaymentStatus.REFUNDED, p.updatedAt = :now, p.version = p.version + 1 " +
             "where p.id = :id and p.status = PaymentStatus.REFUND_PENDING and p.refundRequestedAt is not null")
     int markRefundSucceeded(@Param("id") long id, @Param("now") Instant now);
+
+    /**
+     * Up to {@code limit} requested refunds whose outcome should be asked about at {@code now}: still REFUND_PENDING,
+     * requested at or before {@code requestedBefore} (not while the request may still be on its way), fewer than
+     * {@code maxQueries} queries made, and past the waiting time of the last one. Those never queried come first.
+     * {@code FOR UPDATE SKIP LOCKED}: call it inside the transaction that claims them.
+     */
+    @Query(value = "select * from payments "
+            + "where status = 'REFUND_PENDING' and refund_requested_at <= :requestedBefore and requested_at is not null "
+            + "and refund_queries < :maxQueries "
+            + "and (refund_next_query_at is null or refund_next_query_at <= :now) "
+            + "order by refund_next_query_at nulls first, id limit :limit "
+            + "for update skip locked", nativeQuery = true)
+    List<Payment> findRefundsToConfirm(@Param("now") Instant now, @Param("requestedBefore") Instant requestedBefore,
+                                       @Param("maxQueries") int maxQueries, @Param("limit") int limit);
+
+    /**
+     * Takes one due query: counts it and sets when the next one may be made. 0 means somebody else took it, or the
+     * payment does not wait for a refund any more. Check the row count.
+     */
+    @Modifying
+    @Query("update Payment p set p.refundQueries = p.refundQueries + 1, p.refundNextQueryAt = :nextQueryAt, "
+            + "p.updatedAt = :now, p.version = p.version + 1 "
+            + "where p.id = :id and p.status = com.bidtix.payment.domain.PaymentStatus.REFUND_PENDING "
+            + "and p.refundRequestedAt is not null "
+            + "and (p.refundNextQueryAt is null or p.refundNextQueryAt <= :now)")
+    int claimRefundQuery(@Param("id") long id, @Param("nextQueryAt") Instant nextQueryAt, @Param("now") Instant now);
+
+    /** No more scheduled queries about this refund: its answer is known (rejected). */
+    @Modifying
+    @Query("update Payment p set p.refundQueries = :maxQueries, p.updatedAt = :now, p.version = p.version + 1 "
+            + "where p.id = :id and p.status = com.bidtix.payment.domain.PaymentStatus.REFUND_PENDING")
+    int stopRefundQueries(@Param("id") long id, @Param("maxQueries") int maxQueries, @Param("now") Instant now);
 }

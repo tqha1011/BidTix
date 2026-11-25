@@ -40,6 +40,9 @@ public class RefundPaymentJob {
     private static final Integer MAX_REFUND_REQUEST = 100;
     private final Clock clock;
     private static final String VNPAY_SUCCESS = "00";
+    /** vnp_TransactionType of a refund record: the whole amount, or a part of it. */
+    private static final String VNPAY_FULL_REFUND = "02";
+    private static final String VNPAY_PARTIAL_REFUND = "03";
     /** vnp_ResponseCode: a refund of this transaction was already requested and VNPAY is processing it. */
     private static final String VNPAY_REFUND_ALREADY_REQUESTED = "94";
     /** payments.failure_reason is VARCHAR(255). */
@@ -50,6 +53,13 @@ public class RefundPaymentJob {
     private static final List<Duration> RETRY_WAITS =
             List.of(Duration.ofMinutes(1), Duration.ofMinutes(5), Duration.ofMinutes(30));
     private static final int MAX_REFUND_ATTEMPTS = 5;
+    /** The wait after the 1st, 2nd, ... scheduled query about a refund; the last one repeats. */
+    private static final List<Duration> QUERY_WAITS = List.of(Duration.ofMinutes(1), Duration.ofMinutes(5),
+            Duration.ofMinutes(30), Duration.ofHours(2), Duration.ofHours(12));
+    /** About three days of asking; after that a person has to look. */
+    static final int MAX_REFUND_QUERIES = 10;
+    /** A refund requested more recently than this may still be on its way: not queried by the schedule yet. */
+    private static final Duration QUERY_DELAY_AFTER_REQUEST = Duration.ofMinutes(1);
 
 
     /** Pipelines:
@@ -125,7 +135,64 @@ public class RefundPaymentJob {
             return;
         }
         log.info("Refund request for payment {} returned {}", payment.getTxnRef(), response);
-        handleRefundResponse(response, payment);
+        if(handleRefundResponse(response, payment)){
+            confirmRefund(client, payment);
+        }
+    }
+
+    /**
+     * Asks again about the requested refunds that are still waiting: those still being processed when last asked, and
+     * those whose request got no usable answer. Waits longer each time, {@value #MAX_REFUND_QUERIES} times at most.
+     */
+    @Scheduled(cron = "${bidtix.payment.refund-cron:0 * * * * *}")
+    public void confirmRefunds(){
+        List<Payment> batch;
+        // one moment for the whole run: a query claimed during it is due again only after this
+        Instant now = clock.instant();
+        var client = buildRestClient(properties.refundUrl());
+        do{
+            batch = transactionTemplate.execute(tx ->
+                    paymentRepository.findRefundsToConfirm(now, now.minus(QUERY_DELAY_AFTER_REQUEST),
+                                    MAX_REFUND_QUERIES, MAX_REFUND_REQUEST)
+                            .stream()
+                            .filter(payment -> paymentRepository.claimRefundQuery(
+                                    payment.getId(), now.plus(queryWait(payment)), now) == 1)
+                            .toList());
+
+            for(Payment payment : batch){
+                confirmRefund(client, payment);
+            }
+        }
+        while (batch.size() == MAX_REFUND_REQUEST);
+    }
+
+    /** How long after this query the next one may be made; the entity was read before this query was counted. */
+    private static Duration queryWait(Payment payment){
+        return QUERY_WAITS.get(Math.min(payment.getRefundQueries() + 1, QUERY_WAITS.size()) - 1);
+    }
+
+    /**
+     * Asks VNPAY (querydr) where a requested refund stands. It only reads on their side, so a failure changes nothing
+     * here: the schedule asks again. It must never give the claim back, which would send the refund again.
+     */
+    private void confirmRefund(RestClient client, Payment payment){
+        try{
+            Map<String,String> response = client.post()
+                    .uri(properties.refundUrl())
+                    .body(buildVnPayParams(payment, properties.commandQuery()))
+                    .retrieve()
+                    .body(new ParameterizedTypeReference<>() {
+                    });
+            if(response == null){
+                log.warn("Query of payment {} got an empty answer", payment.getTxnRef());
+                return;
+            }
+            log.info("Query of payment {} returned {}", payment.getTxnRef(), response);
+            handleQueryResponse(response, payment);
+        }
+        catch(RuntimeException e){
+            log.warn("Could not confirm the refund of payment {}: {}", payment.getTxnRef(), e.toString());
+        }
     }
 
     /** True only when no connection was made. A read timeout or a broken connection may come after VNPAY got the request. */
@@ -158,49 +225,119 @@ public class RefundPaymentJob {
     /**
      * What VNPAY's answer to one refund request means. Three checks, in this order: the signature (and that it is about
      * this payment), {@code vnp_ResponseCode} (was the request processed), and only then {@code vnp_TransactionStatus}
-     * (where the refund stands). The payment stays REFUND_PENDING whatever the answer: VNPAY's documentation names no
-     * status that clearly says the money is back, so nothing here makes it REFUNDED. A refusal is added to its
+     * (where the refund stands). The payment stays REFUND_PENDING whatever the answer: only querydr makes it REFUNDED
+     * (see {@link #handleQueryResponse}). A refusal is added to its
      * {@code failure_reason}, for a person to look at; its claim stays, so it is not requested again by itself.
      * Call it outside any transaction.
+     *
+     * @return true when VNPAY has the refund (response code 00 with status 00, 05 or 06, or code 94: requested before),
+     * so it is worth asking querydr where it stands
      */
-    void handleRefundResponse(Map<String,String> response, Payment payment){
+    boolean handleRefundResponse(Map<String,String> response, Payment payment){
         if(!signer.verifyRefundResponse(response)){
             String unverified = response.get("vnp_ResponseCode");
             if(response.get("vnp_SecureHash") == null && unverified != null && !VNPAY_SUCCESS.equals(unverified)){
                 // VNPAY does not sign its error answers: note the code for a person, and change nothing else
                 recordRefundFailure(payment, "Refund failed with an unsigned answer: response code " + unverified);
-                return;
+                return false;
             }
             log.error("Refund response for payment {} has an invalid signature: {}", payment.getTxnRef(), response);
-            return;
+            return false;
         }
         if(!payment.getTxnRef().equals(response.get("vnp_TxnRef"))){
             log.error("Refund response for payment {} is about another one: {}", payment.getTxnRef(), response);
-            return;
+            return false;
         }
 
         String code = Objects.toString(response.get("vnp_ResponseCode"), "");
         if(VNPAY_REFUND_ALREADY_REQUESTED.equals(code)){
             log.info("Refund of payment {} was requested before and is being processed", payment.getTxnRef());
-            return;
+            return true;
         }
         if(!VNPAY_SUCCESS.equals(code)){
             recordRefundFailure(payment, "Refund not processed: response code " + code);
+            return false;
+        }
+
+        String status = Objects.toString(response.get("vnp_TransactionStatus"), "");
+        return switch (status) {
+            // 00 successful, 05 processing at VNPAY, 06 sent on to the bank
+            case VNPAY_SUCCESS, "05", "06" -> {
+                log.info("VNPAY accepted the refund of payment {} (status {})", payment.getTxnRef(), status);
+                yield true;
+            }
+            case "09" -> {
+                recordRefundRejected(payment);
+                yield false;
+            }
+            default -> {
+                log.warn("Refund of payment {} has an unexpected transaction status '{}'", payment.getTxnRef(), status);
+                yield false;
+            }
+        };
+    }
+
+    /**
+     * What querydr's answer says about a requested refund: signature and reference first, then {@code vnp_ResponseCode},
+     * then the record's type and status. Only a full-refund record (type 02, the only kind this application asks for)
+     * settles anything: 00 makes the payment REFUNDED, 09 records the rejection. A payment record (type 01) says nothing
+     * about the refund, whatever its status, and everything else leaves the payment as it is. Reading status 00 of a
+     * refund record as "refunded" is our reading of VNPAY's documentation, not yet seen on a real answer.
+     * Call it outside any transaction.
+     */
+    void handleQueryResponse(Map<String,String> response, Payment payment){
+        if(!signer.verifyQueryResponse(response)){
+            if(response.get("vnp_SecureHash") == null){
+                // VNPAY does not sign its error answers
+                log.warn("Query of payment {} got an unsigned answer: response code {}", payment.getTxnRef(),
+                        response.get("vnp_ResponseCode"));
+                return;
+            }
+            log.error("Query response for payment {} has an invalid signature: {}", payment.getTxnRef(), response);
+            return;
+        }
+        if(!payment.getTxnRef().equals(response.get("vnp_TxnRef"))){
+            log.error("Query response for payment {} is about another one: {}", payment.getTxnRef(), response);
+            return;
+        }
+
+        String code = Objects.toString(response.get("vnp_ResponseCode"), "");
+        if(!VNPAY_SUCCESS.equals(code)){
+            log.warn("Query of payment {} was not processed: response code {}", payment.getTxnRef(), code);
             return;
         }
 
         String status = Objects.toString(response.get("vnp_TransactionStatus"), "");
+        String type = Objects.toString(response.get("vnp_TransactionType"), "");
+        if(VNPAY_PARTIAL_REFUND.equals(type)){
+            log.error("Query of payment {} shows a partial refund (status {})", payment.getTxnRef(), status);
+            return;
+        }
+        if(!VNPAY_FULL_REFUND.equals(type)){
+            log.info("Query of payment {} returned no refund record (type '{}', status '{}')", payment.getTxnRef(), type,
+                    status);
+            return;
+        }
         switch (status) {
-            // processing at VNPAY, or sent on to the bank
+            case VNPAY_SUCCESS -> recordRefundSuccess(payment);
             case "05", "06" -> log.info("Refund of payment {} is being processed (status {})", payment.getTxnRef(), status);
-            case "09" -> recordRefundFailure(payment, "Refund rejected: transaction status 09");
+            case "09" -> recordRefundRejected(payment);
             default -> log.warn("Refund of payment {} has an unexpected transaction status '{}'", payment.getTxnRef(), status);
         }
     }
 
+    /** VNPAY's answer is final: note it for a person, and stop asking. */
+    private void recordRefundRejected(Payment payment){
+        recordRefundFailure(payment, "Refund rejected: transaction status 09");
+        transactionTemplate.executeWithoutResult(tx ->
+                paymentRepository.stopRefundQueries(payment.getId(), MAX_REFUND_QUERIES, clock.instant()));
+    }
+
     /** Records a successful refund. */
     private void recordRefundSuccess(Payment payment){
-        if(paymentRepository.markRefundSucceeded(payment.getId(), clock.instant()) != 1){
+        int updated = transactionTemplate.execute(tx ->
+                paymentRepository.markRefundSucceeded(payment.getId(), clock.instant()));
+        if(updated != 1){
             log.warn("Payment {} no longer waits for its refund, it is not marked as refunded", payment.getTxnRef());
         }
     }
@@ -243,7 +380,16 @@ public class RefundPaymentJob {
                 .build();
     }
 
+    /**
+     * The parameters of one call to VNPAY's merchant API about a payment, signed: {@code command} is the refund command
+     * (the whole amount) or the query command (querydr, "what happened to this payment"). The two take different fields
+     * and sign them differently.
+     */
     private Map<String,String> buildVnPayParams(Payment payment, String command){
+        boolean refund = properties.commandRefund().equals(command);
+        if(!refund && !properties.commandQuery().equals(command)){
+            throw new IllegalArgumentException("Not a VNPAY merchant API command: " + command);
+        }
         // VNPAY dates are Vietnam time, as yyyyMMddHHmmss
         var vnpayTime = DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(ZoneId.of("Asia/Ho_Chi_Minh"));
         var params = new HashMap<String, String>();
@@ -252,16 +398,18 @@ public class RefundPaymentJob {
         params.put("vnp_Version", properties.version());
         params.put("vnp_Command", command);
         params.put("vnp_TmnCode", properties.tmnCode());
-        params.put("vnp_TransactionType", "02");   // the whole amount
         params.put("vnp_TxnRef", payment.getTxnRef());
-        params.put("vnp_Amount", String.valueOf(Math.multiplyExact(payment.getAmount(), 100L)));   // VND times 100
-        if (payment.getProviderTxnId() != null) {   // optional
-            params.put("vnp_TransactionNo", payment.getProviderTxnId());
+        if (refund) {
+            params.put("vnp_TransactionType", "02");   // the whole amount
+            params.put("vnp_Amount", String.valueOf(Math.multiplyExact(payment.getAmount(), 100L)));   // VND times 100
+            if (payment.getProviderTxnId() != null) {   // optional
+                params.put("vnp_TransactionNo", payment.getProviderTxnId());
+            }
+            params.put("vnp_CreateBy", "system");
         }
         // the vnp_CreateDate of the payment request; findPaymentWithStatus leaves out payments that never stored it
         params.put("vnp_TransactionDate", vnpayTime.format(Objects.requireNonNull(payment.getRequestedAt(),
                 () -> "Payment " + payment.getTxnRef() + " has no requested_at, VNPAY cannot refund it")));
-        params.put("vnp_CreateBy", "system");
         params.put("vnp_CreateDate", vnpayTime.format(clock.instant()));
         // the address of THIS server, not the customer's
         String serverIp;
@@ -271,9 +419,9 @@ public class RefundPaymentJob {
             serverIp = "127.0.0.1";
         }
         params.put("vnp_IpAddr", serverIp);
-        params.put("vnp_OrderInfo", "Hoan tien giao dich " + payment.getTxnRef());
+        params.put("vnp_OrderInfo", (refund ? "Hoan tien giao dich " : "Truy van giao dich ") + payment.getTxnRef());
         // last: it covers the values above
-        params.put("vnp_SecureHash", signer.refundRequestHash(params));
+        params.put("vnp_SecureHash", refund ? signer.refundRequestHash(params) : signer.queryRequestHash(params));
         return params;
     }
 }

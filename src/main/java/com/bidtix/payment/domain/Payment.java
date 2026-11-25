@@ -71,6 +71,14 @@ public class Payment extends AuditableEntity {
     @Column(name = "refund_next_attempt_at")
     private Instant refundNextAttemptAt;
 
+    /** How many scheduled queries about the refund have been made (or no more are wanted, when it is at the limit). */
+    @Column(name = "refund_queries", nullable = false)
+    private int refundQueries;
+
+    /** Do not query the provider about the refund again before this moment. */
+    @Column(name = "refund_next_query_at")
+    private Instant refundNextQueryAt;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private PaymentStatus status = PaymentStatus.PENDING;
