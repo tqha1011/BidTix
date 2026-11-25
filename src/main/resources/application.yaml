@@ -58,7 +58,7 @@ bidtix:
     # When the refund job asks VNPAY to refund the REFUND_PENDING payments and to confirm requested refunds (Spring cron:
     # second minute hour day month weekday, e.g. "0 * * * * *" for every minute). "-" turns both off, which it is for
     # now: the VNPAY sandbox does not answer the refund API yet, and a payment sent to it would stay claimed.
-    refund-cron: "-"
+    refund-cron: "0 * * * * *"
     vnpay:
       tmn-code: ${VNP_TMNCODE:}
       hash-secret: ${VNP_HASH_SECRET:}
