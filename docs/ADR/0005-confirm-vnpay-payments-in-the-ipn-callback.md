@@ -84,8 +84,11 @@ A booking order has no such check on `paid_at`: a successful payment is applied 
 - `ux_payments_one_succeeded_per_order` backs this up in the database: at most one `SUCCEEDED` payment per order.
 
 **Costs and open points**
-- **Nothing refunds yet.** `REFUND_PENDING` payments wait for a job (`FOR UPDATE SKIP LOCKED`, provider call outside
-  the transaction, then `REFUNDED`).
+- **Refunds are requested, not confirmed.** `RefundPaymentJob` claims `REFUND_PENDING` payments
+  (`FOR UPDATE SKIP LOCKED` and `refund_requested_at`, committed) and calls VNPAY outside any transaction. Nothing
+  marks them `REFUNDED` yet. Only a request that certainly never reached VNPAY gives up its claim and is retried (1, 5,
+  30 minutes, 5 attempts); one that timed out or got an error is not sent again, because it could return the money
+  twice. Both gaps need a query to VNPAY.
 - **Nothing watches unprocessed events** (`processed_at IS NULL`). After VNPAY's last retry they stay until someone
   looks. A second, different result for an already decided payment (say success after failure) is also only visible
   there: it is answered `02`.

@@ -33,7 +33,7 @@ and caching that never decides who gets a ticket.
 | Problem | Approach | State |
 |---|---|---|
 | Two people buy the last seat | Conditional `UPDATE ... WHERE status = 'AVAILABLE'` + affected-row check; partial unique index on active tickets as the last line of defence ([ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md)) | **Done for seated zones** (30 parallel users, 1 seat: 1 wins; 60 users on 10 seats: no seat sold twice, no deadlock) |
-| Payment results arrive late, twice, or for a dead order | Booking only reserves; VNPAY's signed callback applies the money once (conditional `UPDATE` on the payment), stores every authentic callback, and marks money that cannot be applied for refund ([ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)) | **Done** (8 identical callbacks in parallel: paid once); refunds planned, not yet run against the sandbox |
+| Payment results arrive late, twice, or for a dead order | Booking only reserves; VNPAY's signed callback applies the money once (conditional `UPDATE` on the payment), stores every authentic callback, and marks money that cannot be applied for refund ([ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)) | **Done** (8 identical callbacks in parallel: paid once); refunds are requested but not yet confirmed, not yet run against the sandbox |
 | Overselling standing tickets | Atomic `UPDATE ... SET available = available - n WHERE available >= n` + `CHECK (available BETWEEN 0 AND capacity)` | Done: `UPDATE ... WHERE available_quantity >= n` + row count, concurrency test ([ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md)) |
 | Concurrent bids | One conditional `UPDATE` on the auction row (price, bid count, anti-sniping extension), `UNIQUE (auction_id, amount)` | **Done**, concurrency test |
 | Client retries a request | `Idempotency-Key` header, request hash, replayed response | **Done** for orders, payments and bids |
@@ -209,7 +209,7 @@ Method, numbers and caveats: [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Roadmap
 
-- [x] Database schema (Flyway migrations V1–V17 by module) and JPA entities
+- [x] Database schema (Flyway migrations V1–V18 by module) and JPA entities
 - [x] Authentication: register, login, refresh with rotation, logout, refresh token in a cookie
 - [x] Global error handling
 - [x] Testcontainers (Postgres) and a working context test

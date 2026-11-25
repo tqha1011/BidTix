@@ -63,6 +63,14 @@ public class Payment extends AuditableEntity {
     @Column(name = "refund_requested_at")
     private Instant refundRequestedAt;
 
+    /** How many times this payment has been claimed for a refund request. */
+    @Column(name = "refund_attempts", nullable = false)
+    private int refundAttempts;
+
+    /** Set when a request never reached the provider: do not claim the payment again before this moment. */
+    @Column(name = "refund_next_attempt_at")
+    private Instant refundNextAttemptAt;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private PaymentStatus status = PaymentStatus.PENDING;

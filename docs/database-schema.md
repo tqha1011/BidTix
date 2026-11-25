@@ -27,6 +27,7 @@ Version numbers are global across modules, so a new migration always takes the n
 | V15 | `payment` | `payments.txn_ref` (our reference per attempt, `UNIQUE (provider, txn_ref)`), provider `VNPAY`, status `REFUND_PENDING`, `ux_payments_one_succeeded_per_order` |
 | V16 | `payment` | `payments.requested_at` (the `vnp_CreateDate` sent to VNPAY) |
 | V17 | `payment` | `payments.refund_requested_at` (the claim on a refund) |
+| V18 | `payment` | `payments.refund_attempts`, `payments.refund_next_attempt_at` (retrying a refund request) |
 
 ## Conventions
 
@@ -86,13 +87,14 @@ users ──< idempotency_keys
   `provider_txn_id` is the provider's own number, set when it confirms.
 - `payments.refund_requested_at` claims a refund: set by one conditional `UPDATE` (`REFUND_PENDING` and still `NULL`,
   row count checked) and committed before VNPAY is called. It means the request may have been sent, not that the money
-  is back.
+  is back. It goes back to `NULL` only when the request certainly never reached VNPAY; then `refund_next_attempt_at`
+  holds the payment back, and `refund_attempts` (counted at each claim) ends the retries after 5.
 - `payments.requested_at` is exactly the `vnp_CreateDate` sent to VNPAY (whole seconds). Its query and refund APIs need
   it as `vnp_TransactionDate`. `NULL` for payments made before V16.
 - `ux_payments_one_succeeded_per_order` (V15): at most one `SUCCEEDED` payment per order. A second confirmed payment for
   the same order is stored as `REFUND_PENDING`, as is one that arrives after the order expired or was cancelled.
-- A payment moves `PENDING → SUCCEEDED | FAILED | REFUND_PENDING`, then `REFUND_PENDING → REFUNDED` (no refund job
-  yet). `provider_txn_id` is not stored for a failed transaction.
+- A payment moves `PENDING → SUCCEEDED | FAILED | REFUND_PENDING`, then `REFUND_PENDING → REFUNDED` (the refund job
+  requests refunds, but nothing sets `REFUNDED` yet). `provider_txn_id` is not stored for a failed transaction.
 - `payment_webhook_events` is an inbox: every callback with a valid signature, one row per
   `UNIQUE (provider, provider_event_id)` (VNPAY: `vnp_TxnRef:vnp_TransactionStatus`), with the payload.
   `processed_at` is set in the transaction that records the result; a row without it is still unhandled. A repeat adds

@@ -35,7 +35,7 @@ seat-hold or payment flow).
 - Tests: JUnit 5, Mockito, MockMvc, Spring Security test, Testcontainers (real Postgres; Docker is
   required to run the integration tests; `PostgresIntegrationTest` also starts a Redis container).
 
-> Status: schema (Flyway V1–V17), JPA entities, the `auth` module, global error handling, Testcontainers
+> Status: schema (Flyway V1–V18), JPA entities, the `auth` module, global error handling, Testcontainers
 > and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats) and **GENERAL_ADMISSION zones**
 > (counter decrement) are done. Booking does not take payment: `POST /api/v1/orders` (CUSTOMER, `OrderController`, 201 with
 > the order, status PENDING_PAYMENT) needs an `Idempotency-Key` header (see **Idempotency**). The customer then pays with
@@ -68,7 +68,8 @@ seat-hold or payment flow).
 > database (`BidRepository.findTopBids`, which reads every bid of the auction) with `ZADD GT`; a committed bid (`BidPlacedEvent`, `@TransactionalEventListener(AFTER_COMMIT)`)
 > raises that bidder's score only when the ZSET already exists (a Lua script), because a ZSET made of one bidder would look complete and never be rebuilt. Redis down:
 > reads fall back to the database and writes are ignored (fail-open).
-> Not started: event cancel and update, auction cancel, the refund job for REFUND_PENDING payments, the VNPAY return URL
+> Not started: event cancel and update, auction cancel, confirming that a requested refund was made (nothing becomes
+> REFUNDED), the VNPAY return URL
 > endpoint, and querying VNPAY for payments left PENDING. Rate limits exist for login, register, the VNPAY callback and
 > logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
@@ -168,12 +169,17 @@ The module sees orders only through `PayableOrders`, which `booking` implements 
    VNPAY retries unless it gets `00` or `02`. The answer is `TransactionResponse` (`RspCode`, `Message`), never a
    `ProblemDetail` once the request reaches the service.
 
-Refunds (job not written yet): take a payment with `PaymentRepository.markRefundRequested` (1 row = yours), commit, then call
-VNPAY outside any transaction; a marked payment is never requested again automatically.
+Refunds (`payment/infrastructure/RefundPaymentJob`, `bidtix.payment.refund-cron`, every minute; `-` turns it off, which
+`PostgresIntegrationTest` does): batches of `REFUND_PENDING` payments are locked (`SKIP LOCKED`) and claimed with
+`markRefundRequested` (1 row = yours), committed, then VNPAY is called outside any transaction. The claim is given back
+(`releaseRefundClaim`) only when the request certainly never reached VNPAY (it could not be built, or no connection was
+made): retried after 1, 5, then 30 minutes, 5 attempts in all. A read timeout, a broken connection, an HTTP error or any
+answer keeps the claim, so nothing is sent twice; the problem is written to `failure_reason` after `[refund]`. `handleRefundResponse` checks the signature, `vnp_ResponseCode`, then
+`vnp_TransactionStatus`; it records refusals in `failure_reason` and marks nothing `REFUNDED` yet.
 
 Rules for changing it: the payment's conditional `UPDATE` (row count checked) is the guard against processing twice, never
 the stored event; no refund or other VNPAY call inside the request's transaction; only the IPN confirms a payment, never the
-return URL. Open points: refund job, return URL endpoint, nothing scans events with `processed_at IS NULL` or asks VNPAY
+return URL. Open points: marking refunds `REFUNDED`, return URL endpoint, nothing scans events with `processed_at IS NULL` or asks VNPAY
 about payments left `PENDING`.
 
 ## Architecture

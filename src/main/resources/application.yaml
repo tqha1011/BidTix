@@ -55,6 +55,9 @@ bidtix:
     # An order with a payment still waiting for the provider's callback is kept this long after its deadline before its
     # stock is released (booking) or the offer passes on (auction). Customers get no extra time to pay. 0 turns it off.
     confirmation-grace: 10m
+    # When the refund job asks VNPAY to refund the REFUND_PENDING payments (Spring cron: second minute hour day month
+    # weekday). Every minute; "-" turns the job off.
+    refund-cron: "-"
     vnpay:
       tmn-code: ${VNP_TMNCODE:}
       hash-secret: ${VNP_HASH_SECRET:}

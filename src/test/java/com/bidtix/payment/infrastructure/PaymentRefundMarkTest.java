@@ -41,6 +41,8 @@ class PaymentRefundMarkTest extends PostgresIntegrationTest {
         assertThat(requestedAt(payment)).as("the first mark stays").isEqualTo(now);
         assertThat(jdbc.queryForMap("select status, version from payments where id = ?", payment))
                 .containsEntry("status", "REFUND_PENDING").containsEntry("version", 1L);
+        assertThat(jdbc.queryForObject("select refund_attempts from payments where id = ?", Integer.class, payment))
+                .as("one try counted").isEqualTo(1);
     }
 
     @Test
@@ -100,6 +102,16 @@ class PaymentRefundMarkTest extends PostgresIntegrationTest {
     }
 
     @Test
+    void aRefundWaitingForItsNextTryIsNotFoundBeforeThen() {
+        long later = refundable("2000-01-01");
+        long due = refundable("2000-01-01");
+        jdbc.update("update payments set refund_next_attempt_at = now() + interval '1 minute' where id = ?", later);
+        jdbc.update("update payments set refund_next_attempt_at = now() - interval '1 second' where id = ?", due);
+
+        assertThat(find(1000)).contains(due).doesNotContain(later);
+    }
+
+    @Test
     void aRefundLockedByAnotherTransactionIsSkipped_notWaitedFor() throws Exception {
         long payment = refundable("2000-01-01");
         ExecutorService other = Executors.newSingleThreadExecutor();
@@ -120,7 +132,8 @@ class PaymentRefundMarkTest extends PostgresIntegrationTest {
     // ---- helpers ---------------------------------------------------------------------------------
 
     private List<Long> find(int limit) {
-        return tx.execute(status -> payments.findPaymentWithStatus(PaymentStatus.REFUND_PENDING, limit).stream()
+        return tx.execute(status -> payments.findPaymentWithStatus(PaymentStatus.REFUND_PENDING, Instant.now(), limit)
+                .stream()
                 .map(Payment::getId)
                 .toList());
     }
