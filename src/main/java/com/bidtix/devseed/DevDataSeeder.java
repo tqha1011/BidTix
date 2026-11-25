@@ -96,7 +96,11 @@ public class DevDataSeeder implements ApplicationRunner {
         ZoneResponse balcony = zoneService.createZone(organizerId, acoustic.publicId(), seated("Balcony", 500_000,
                 new SeatRowRequest("A", 1, 15), new SeatRowRequest("B", 1, 15)));
 
-        // paid tickets, so the admin ticket list is not empty (the mock gateway always accepts the payment)
+        // only a published event sells tickets
+        eventService.publish(organizerId, live.publicId());
+        eventService.publish(organizerId, acoustic.publicId());
+
+        // paid tickets, so the admin ticket list is not empty
         buy(customers.get(0), live, vip, 2);
         buy(customers.get(1), live, standard, 3);
         buy(customers.get(2), acoustic, balcony, 1);

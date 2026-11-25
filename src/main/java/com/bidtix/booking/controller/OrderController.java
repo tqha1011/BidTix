@@ -53,7 +53,8 @@ public class OrderController {
      * Books seats (SEATED zone) or a quantity (GENERAL_ADMISSION zone) for the logged-in customer and holds them. It does not
      * take payment. 201 with the order: {@code status} PENDING_PAYMENT and no tickets; the stock stays held until
      * {@code expiresAt}, and the tickets are issued once the order is paid. 409 {@code SEAT_UNAVAILABLE} (with the
-     * lost {@code seatPublicIds}) or {@code ZONE_SOLD_OUT} when the stock is gone; 404 for an unknown event or zone.
+     * lost {@code seatPublicIds}) or {@code ZONE_SOLD_OUT} when the stock is gone, {@code EVENT_NOT_ON_SALE} outside the
+     * sale window; 404 for an unknown zone, or an event that is unknown or not published.
      * Needs an {@code Idempotency-Key} header (checked by {@code IdempotencyFilter}): a retry with the same key and body
      * replays the first response instead of booking twice.
      */

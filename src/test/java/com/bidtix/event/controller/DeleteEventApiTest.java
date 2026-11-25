@@ -51,10 +51,12 @@ class DeleteEventApiTest extends ApiTest {
     @Test
     void aDraftSomebodyOrderedFrom_staysWhole() throws Exception {
         UUID me = user("ORGANIZER");
-        UUID event = Catalog.event(jdbc, me, "DRAFT");
+        UUID event = Catalog.event(jdbc, me, "PUBLISHED");
         UUID seated = Catalog.seatedZone(jdbc, event, 2);
         UUID seat = Catalog.seats(jdbc, seated).get(0);
         bookingService.bookTicket(new BookingTicketRequest(event, seated, java.util.List.of(seat), null), user("CUSTOMER"));
+        // booking refuses a draft; this is the database's guard should one ever have orders
+        jdbc.update("update events set status = 'DRAFT' where public_id = ?", event);
 
         remove(me, event).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("EVENT_NOT_EDITABLE"));
 

@@ -65,6 +65,10 @@ public final class GeneralAdmissionFixtures {
                 userIds.add(user.getPublicId());
             }
             em.flush();
+            // only a published event sells tickets
+            em.createQuery("update Event e set e.status = com.bidtix.event.domain.EventStatus.PUBLISHED where e.id in :ids")
+                    .setParameter("ids", List.of(event.getId(), otherEvent.getId()))
+                    .executeUpdate();
             return new Fixture(event.getPublicId(), standing.getPublicId(), standing.getId(), standing.getPrice(),
                     seated.getPublicId(), seatIds, otherStanding.getPublicId(), userIds);
         });

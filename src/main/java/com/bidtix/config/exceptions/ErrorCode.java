@@ -49,6 +49,7 @@ public enum ErrorCode {
     ZONE_NAME_TAKEN(HttpStatus.CONFLICT, "A zone with this name already exists for the event"),
     EVENT_NOT_EDITABLE(HttpStatus.CONFLICT, "Only a DRAFT event can be changed"),
     EVENT_HAS_NO_ZONES(HttpStatus.CONFLICT, "An event needs at least one zone before it can be published"),
+    EVENT_NOT_ON_SALE(HttpStatus.CONFLICT, "The event is not on sale at this time"),
 
     // --- auction ---
     AUCTION_NOT_FOUND(HttpStatus.NOT_FOUND, "Auction not found"),

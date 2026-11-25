@@ -103,10 +103,12 @@ class ManageZoneApiTest extends ApiTest {
     @Test
     void aZoneSomebodyOrderedFrom_staysWhole() throws Exception {
         UUID me = user("ORGANIZER");
-        UUID event = Catalog.event(jdbc, me, "DRAFT");
+        UUID event = Catalog.event(jdbc, me, "PUBLISHED");
         UUID zone = Catalog.seatedZone(jdbc, event, 2);
         bookingService.bookTicket(new BookingTicketRequest(event, zone, List.of(Catalog.seats(jdbc, zone).get(0)), null),
                 user("CUSTOMER"));
+        // booking refuses a draft; this is the database's guard should one ever have orders
+        jdbc.update("update events set status = 'DRAFT' where public_id = ?", event);
 
         remove(me, event, zone).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("EVENT_NOT_EDITABLE"));
 

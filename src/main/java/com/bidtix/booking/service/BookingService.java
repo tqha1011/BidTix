@@ -13,10 +13,7 @@ import com.bidtix.booking.infrastructure.OrderRepository;
 import com.bidtix.common.utils.GenerateOrderCode;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
-import com.bidtix.event.domain.Event;
-import com.bidtix.event.domain.Seat;
-import com.bidtix.event.domain.TicketZone;
-import com.bidtix.event.domain.ZoneType;
+import com.bidtix.event.domain.*;
 import com.bidtix.event.infrastructure.EventRepository;
 import com.bidtix.event.infrastructure.SeatRepository;
 import com.bidtix.event.infrastructure.TicketZoneRepository;
@@ -27,6 +24,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.*;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -120,6 +118,7 @@ public class BookingService {
      * cannot be taken, everything (including the order) rolls back.
      */
     private BaseBookingTicketResult reserve(BookingTicketRequest request, UUID userPublicId) {
+        Instant now = clock.instant();
         var user = userRepository.findByPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
         var event = eventRepository.findByPublicId(request.eventPublicId())
@@ -129,6 +128,14 @@ public class BookingService {
         // a zone of another event is "not found" for this event
         if (!zone.getEvent().getId().equals(event.getId())) {
             throw new BusinessException(ErrorCode.ZONE_NOTFOUND);
+        }
+
+        if(!event.getStatus().equals(EventStatus.PUBLISHED)) {
+            throw new BusinessException(ErrorCode.EVENT_NOTFOUND);
+        }
+
+        if(now.isBefore(event.getSaleStartsAt()) || !now.isBefore(event.getSaleEndsAt())) {
+            throw new BusinessException(ErrorCode.EVENT_NOT_ON_SALE);
         }
         validateZoneAndSeats(zone, request);
 

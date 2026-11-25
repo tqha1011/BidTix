@@ -81,8 +81,8 @@ seat-hold or payment flow).
 > reads fall back to the database and writes are ignored (fail-open).
 > `GET /api/v1/payments/vnpay/return` (public, signed, rate limit `vnpay-return`) shows the state of a payment and changes
 > nothing.
-> Not started: cancelling an event, enforcing `max_tickets_per_user`, refusing bookings of an event that is not PUBLISHED or
-> outside its sale window, ticket check-in, and querying VNPAY for payments left PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
+> Not started: cancelling an event, enforcing `max_tickets_per_user`, ticket check-in, and querying VNPAY for payments left
+> PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
 > logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
 
@@ -137,7 +137,9 @@ token cannot both win (conditional `UPDATE ... WHERE revoked_at IS NULL`).
 **Booking flow** (`BookingService.bookTicket`, SEATED and GENERAL_ADMISSION zones, `POST /api/v1/orders`).
 Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) (seats) and
 [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). The Redis refusal gate in front of it: [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md). At most
-`bidtix.booking.max-tickets-per-order` (5) tickets per order, and the zone must belong to the event. The
+`bidtix.booking.max-tickets-per-order` (5) tickets per order, and the zone must belong to the event. Only a PUBLISHED
+event sells (anything else is `EVENT_NOTFOUND`), and only from `sale_starts_at` until before `sale_ends_at`
+(`EVENT_NOT_ON_SALE`). The
 method runs one transaction with `TransactionTemplate` (the gate check and its flags stay outside it) and returns a
 `BookingTicketSeatsResult` or a `BookingTicketQuantityResult` (both are a `BaseBookingTicketResult`), PENDING_PAYMENT and
 without tickets:
