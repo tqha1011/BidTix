@@ -3,12 +3,14 @@ package com.bidtix.booking.infrastructure;
 import com.bidtix.booking.domain.Ticket;
 import com.bidtix.booking.domain.TicketStatus;
 import com.bidtix.booking.dtos.AdminTicketResponse;
+import com.bidtix.booking.dtos.MyTicketResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 
 import java.util.Collection;
+import java.util.UUID;
 
 public interface TicketRepository extends JpaRepository<Ticket, Long> {
 
@@ -33,4 +35,21 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
             """,
             countQuery = "select count(t) from Ticket t where t.eventId = :eventId and t.status in :statuses")
     Page<AdminTicketResponse> findAdminViewByEvent(Long eventId, Collection<TicketStatus> statuses, Pageable pageable);
+
+    /** Read model for the owner's own list: one query across the modules, like the admin list. Newest first. */
+    @Query(value = """
+            select new com.bidtix.booking.dtos.MyTicketResponse(
+                t.publicId, t.status, e.publicId, e.title, e.startsAt, z.name, s.rowLabel, s.seatNumber,
+                o.orderCode, t.createdAt)
+            from Ticket t
+            join t.order o
+            join Event e on e.id = t.eventId
+            join TicketZone z on z.id = t.zoneId
+            left join Seat s on s.id = t.seatId
+            join User u on u.id = t.ownerId
+            where u.publicId = :ownerPublicId
+            order by t.id desc
+            """,
+            countQuery = "select count(t) from Ticket t join User u on u.id = t.ownerId where u.publicId = :ownerPublicId")
+    Page<MyTicketResponse> findTicketsOfOwner(UUID ownerPublicId, Pageable pageable);
 }
