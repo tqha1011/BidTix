@@ -174,6 +174,15 @@ public class EventService {
                 .map(EventResponse::from));
     }
 
+    /** The caller's own events, drafts included, newest first. Not cached: an organizer must see their changes at once. */
+    @Transactional(readOnly = true)
+    public PageResponse<EventResponse> listMine(UUID organizerPublicId, int page, int size) {
+        User organizer = userRepository.findByPublicId(organizerPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
+        var pageable = PageRequest.of(clampPage(page), clampSize(size), Sort.by(Sort.Direction.DESC, "id"));
+        return PageResponse.from(eventRepository.findByOrganizerId(organizer.getId(), pageable).map(EventResponse::from));
+    }
+
     /** The cache key of a list page, built from the corrected paging values. Public because SpEL calls it. */
     public static String pageKey(int page, int size) {
         return clampPage(page) + ":" + clampSize(size);

@@ -64,6 +64,14 @@ public class EventController {
         return eventService.publish(CurrentUser.publicId(principal), eventPublicId);
     }
 
+    /** The logged-in organizer's own events, drafts included, newest first. */
+    @GetMapping("/mine")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public PageResponse<EventResponse> mine(@RequestParam(defaultValue = "0") int page,
+                                            @RequestParam(defaultValue = "20") int size, Principal principal) {
+        return eventService.listMine(CurrentUser.publicId(principal), page, size);
+    }
+
     /**
      * One event with its zones, their prices and what is left. Published events for any logged-in user, a draft only for
      * its organizer (404 {@code EVENT_NOTFOUND} for anybody else).

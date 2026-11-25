@@ -24,6 +24,10 @@ public interface EventRepository extends JpaRepository<Event, Long> {
     @EntityGraph(attributePaths = "venue")
     Page<Event> findByStatusAndStartsAtAfter(EventStatus status, Instant after, Pageable pageable);
 
+    /** One organizer's events, whatever their status. The venue is fetched in the same query, as above. */
+    @EntityGraph(attributePaths = "venue")
+    Page<Event> findByOrganizerId(Long organizerId, Pageable pageable);
+
     /**
      * DRAFT -&gt; PUBLISHED, only if the event is still a DRAFT. Returns the number of rows changed: 0 means somebody
      * else changed the event first. A bulk update does not run {@code @UpdateTimestamp}, so {@code updated_at} is set
