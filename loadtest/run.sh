@@ -3,10 +3,18 @@
 # while p95 stays under 500 ms and under 1% of requests fail. Method and results: docs/benchmarks.md.
 #
 #   loadtest/run.sh [smoke|read|book|mixed|users|all]      (default: all; needs Docker, k6, openssl, jq, curl)
+#   loadtest/run.sh concurrency      highest request rate and most requests open at once, 70% reads and 30% bookings;
+#       knobs: LEVELS="10 25 ..." ROUNDS LEVEL_SECONDS BOOK_SHARE WARM_MIN WARM_MAX
 #
 # Knobs (environment): RATES="100 200 ..." USER_LEVELS="1000 2000 ..." WARMUP STEP CONFIRM RAMP (seconds),
 # POOL (database connections) APP_CPUS DB_CPUS, KEEP=1 leaves the stack running afterwards.
 set -euo pipefail
+
+# A machine that goes to sleep ruins a run (the clocks jump and the tokens expire), so sleep is held off until the
+# script ends. The screen may still switch off and lock.
+if [[ -z ${LOADTEST_AWAKE:-} ]] && systemd-inhibit --what=sleep --why="load test" true 2>/dev/null; then
+    LOADTEST_AWAKE=1 exec systemd-inhibit --what=sleep --who="load test" --why="a load test is running" "$0" "$@"
+fi
 cd "$(dirname "$0")/.."
 
 OUT=target/loadtest
@@ -28,7 +36,19 @@ export K6_NO_USAGE_REPORT=true
 
 RESULTS=$OUT/results-$(date +%Y%m%d-%H%M%S).md
 
-compose() { docker compose -f loadtest/compose.yaml "$@"; }
+# concurrency profile
+LEVELS=${LEVELS:-10 25 50 100 200 400 800 1600 3200 6400 9600}
+ROUNDS=${ROUNDS:-2}
+LEVEL_SECONDS=${LEVEL_SECONDS:-60}
+BOOK_SHARE=${BOOK_SHARE:-0.3}
+WARM_CLIENTS=${WARM_CLIENTS:-50}
+WARM_MIN=${WARM_MIN:-3}
+WARM_MAX=${WARM_MAX:-6}
+COMPOSE_EXTRA=
+METRICS_URL=
+SERVER_ROWS=
+
+compose() { docker compose -f loadtest/compose.yaml ${COMPOSE_EXTRA:+-f "$COMPOSE_EXTRA"} "$@"; }
 say() { printf '\n== %s\n' "$*" >&2; }
 die() { echo "loadtest: $*" >&2; exit 1; }
 record() { printf '%s\n' "$*" | tee -a "$RESULTS"; }
@@ -60,6 +80,7 @@ reset_stack() {
     ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(compose ps -q app)")
     # straight to the container: Docker's port proxy would be one more thing competing for the CPU
     BASE_URL=http://$ip:8080
+    if [[ -n $COMPOSE_EXTRA ]]; then METRICS_URL=http://$ip:9001; fi
     local attempt
     for attempt in $(seq 120); do
         if curl -sf -o /dev/null --max-time 2 "$BASE_URL/v3/api-docs"; then break; fi
@@ -90,6 +111,7 @@ run_k6() {
             # shellcheck disable=SC2086
             docker stats --no-stream --format '{{.Name}} {{.CPUPerc}}' $containers >>"$base.stats"
             ps -o %cpu=,rss= -p "$K6_PID" | awk '{print "k6", $1, $2}' >>"$base.stats" || true
+            if [[ -n $METRICS_URL ]]; then sample_app >>"$base.stats"; fi
         fi
         if (($(awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo) < MIN_FREE_MB)); then
             starved=1
@@ -101,6 +123,25 @@ run_k6() {
     wait "$K6_PID" || true
     K6_PID=
     if ((starved)); then return 2; fi
+}
+
+# One figure of the application's own metrics; nothing when it cannot be had within two seconds.
+metric() {
+    curl -sf --max-time 2 -H "Authorization: Bearer $(jq -r '.[0]' "$OUT/tokens.json")" "$METRICS_URL/actuator/metrics/$1" |
+        jq -r --arg s "$2" '.measurements[] | select(.statistic == $s) | .value' || true
+}
+
+# lines "m <name> <seconds since 1970> <value>": busy request threads, database connections in use and waited for,
+# and the running totals of how often and how long connections were held and waited for
+sample_app() {
+    local spec name statistic value
+    for spec in tomcat.threads.busy:VALUE hikaricp.connections.active:VALUE hikaricp.connections.pending:VALUE \
+        hikaricp.connections.usage:COUNT hikaricp.connections.usage:TOTAL_TIME \
+        hikaricp.connections.acquire:COUNT hikaricp.connections.acquire:TOTAL_TIME; do
+        name=${spec%:*} statistic=${spec#*:}
+        value=$(metric "$name" "$statistic")
+        if [[ -n $value ]]; then echo "m $name:$statistic $(date +%s.%N) $value"; fi
+    done
 }
 
 # average CPU of one container over a run, in percent of one core (200% = two cores fully used)
@@ -224,6 +265,131 @@ users_ladder() {
     record "**Users at once: $held held for ${CONFIRM}s; first failing level: $([[ $failed == 0 ]] && echo none || echo "$failed").**"
 }
 
+# the application's side of one level, from the "m" lines of its samples
+server_figures() {
+    awk '$1 == "m" {
+            k = $2; if (!(k in first)) {first[k] = $4; at[k] = $3}
+            last[k] = $4; to[k] = $3; if ($4 + 0 > max[k]) max[k] = $4 + 0
+        }
+        function per(total, count,   c) {c = last[count] - first[count]; return c > 0 ? sprintf("%.1f", (last[total] - first[total]) / c * 1000) : "-"}
+        END {
+            u = "hikaricp.connections.usage:TOTAL_TIME"; span = to[u] - at[u]
+            busy = "tomcat.threads.busy:VALUE"; act = "hikaricp.connections.active:VALUE"; pen = "hikaricp.connections.pending:VALUE"
+            printf "%s | %s | %s | %s | %s | %s",
+                (busy in max) ? max[busy] + 0 : "-", (act in max) ? max[act] + 0 : "-", (pen in max) ? max[pen] + 0 : "-",
+                per(u, "hikaricp.connections.usage:COUNT"),
+                per("hikaricp.connections.acquire:TOTAL_TIME", "hikaricp.connections.acquire:COUNT"),
+                (span > 0 ? sprintf("%.1f", (last[u] - first[u]) / span) : "-")
+        }' "$1"
+}
+
+# level <label> <concurrency> <seconds>: one measured level, a row for the client and one for the server.
+# Succeeds when the good mark held; LEVEL_FILE names its result, empty when there is none.
+LEVEL_FILE=
+level() {
+    local label=$1 clients=$2 seconds=$3
+    local summary=$OUT/runs/concurrency-$ROUND-$clients-$label.json status=0
+    LEVEL_FILE=
+    sleep "$COOLDOWN"
+    run_k6 "$summary" 10 MODE=concurrency PROFILE=mixed BOOK_SHARE="$BOOK_SHARE" CONCURRENCY="$clients" \
+        RAMP=10 DURATION="$seconds" || status=$?
+    if ((status == 2)) || [[ ! -s $summary ]]; then
+        record "| $label | $clients | no result: $( ((status == 2)) && echo "the load generator ran short of memory" || echo "k6 failed, see ${summary%.json}.log") |"
+        return 1
+    fi
+    LEVEL_FILE=$summary
+    local stats=${summary%.json}.stats
+    record "$(jq -r --arg label "$label" '
+        def pct: (. * 10000 | round) / 100 | "\(.)%";
+        "| \($label) | \(.target) | \(.rps | round) | \(.avg | round) | \(.p95 | round) | \(.p99 | round) | " +
+        "\(.readP95 | round) | \(.bookP95 | round) | \(.failed | pct) | \(.timeouts) | \(.open | round) | " +
+        "\(if .pass then "good" elif .broken then "**broken**" else "slow" end) |"' "$summary")"
+    SERVER_ROWS+="| $label | $clients | $(server_figures "$stats") | $(cpu_of "$stats" app) | $(cpu_of "$stats" database) | $(cpu_of "$stats" cache) | $(awk '$1 == "k6" {cpu = $2} END {printf "%.0f%%", cpu}' "$stats") | $(awk '$1 == "k6" && $3 > max {max = $3} END {printf "%.0f MB", max / 1024}' "$stats") |"$'\n'
+    jq -e .pass "$summary" >/dev/null
+}
+
+# Load that no longer changes the result: one-minute runs until the rate stops climbing by 10% or more.
+warm_until_steady() {
+    local round rate previous=0 rates=()
+    for round in $(seq "$WARM_MAX"); do
+        say "warm-up $round: $WARM_CLIENTS requests at once"
+        run_k6 "$OUT/runs/warmup.json" 0 MODE=concurrency PROFILE=mixed BOOK_SHARE="$BOOK_SHARE" \
+            CONCURRENCY="$WARM_CLIENTS" RAMP=5 DURATION="$LEVEL_SECONDS" || true
+        rate=$(jq '.rps | round' "$OUT/runs/warmup.json")
+        rates+=("$rate")
+        if ((round >= WARM_MIN && previous > 0)) &&
+            awk -v a="$rate" -v b="$previous" 'BEGIN {exit !((a - b < 0 ? b - a : a - b) / b < 0.1)}'; then break; fi
+        previous=$rate
+    done
+    record "Warm-up, not counted: ${#rates[@]} runs at $WARM_CLIENTS requests at once, req/s ${rates[*]}."
+}
+
+# Highest rate and most requests open at once: climb until it breaks, look between, hold the best good level.
+concurrency_round() {
+    local clients good=0 slow=0 broke=0 files=()
+    say "concurrency, round $ROUND: fresh stack"
+    reset_stack
+    record ""
+    record "## Round $ROUND, started $(date '+%H:%M:%S')"
+    record ""
+    warm_until_steady
+    SERVER_ROWS=
+    record ""
+    record "| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |"
+    record "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|"
+    for clients in $LEVELS; do
+        say "round $ROUND: $clients at once"
+        if level ladder "$clients" "$LEVEL_SECONDS"; then
+            if ((!slow)); then good=$clients; fi
+        elif ((!slow)); then
+            slow=$clients
+        fi
+        [[ -n $LEVEL_FILE ]] || break
+        files+=("$LEVEL_FILE")
+        if jq -e .broken "$LEVEL_FILE" >/dev/null; then
+            broke=$clients
+            break
+        fi
+    done
+    if ((good && slow && slow - good > 10)); then
+        clients=$(((good + slow) / 2))
+        if level between "$clients" "$LEVEL_SECONDS"; then good=$clients; fi
+        if [[ -n $LEVEL_FILE ]]; then files+=("$LEVEL_FILE"); fi
+    fi
+    local held="no"
+    if ((good)); then
+        if level confirm "$good" "$CONFIRM"; then held="yes"; fi
+        if [[ -n $LEVEL_FILE ]]; then files+=("$LEVEL_FILE"); fi
+    fi
+
+    record ""
+    record "Server side (CPU: 100% = one core; connections: pool of ${POOL:-10})."
+    record ""
+    record "| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | k6 CPU | k6 RAM |"
+    record "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|"
+    record "${SERVER_ROWS%$'\n'}"
+    check_stock
+    record ""
+    if ((${#files[@]})); then
+        record "$(jq -rs '[.[] | select(.broken | not)] | max_by(.rps) // empty | "**Highest rate without breaking: \(.rps | round) req/s**, with \(.target) requests open, p95 \(.p95 | round) ms."' "${files[@]}")"
+    fi
+    record "**Most requests open at once with p95 < 500 ms and < 1% failed: $good** (held for ${CONFIRM}s: $held)."
+    if ((broke)); then
+        record "**Broke (1% or more failed) at $broke requests open.**"
+    else
+        record "**Never broke; the highest level tried is in the table.**"
+    fi
+    record "Round $ROUND ended $(date '+%H:%M:%S')."
+}
+
+concurrency() {
+    record "- Traffic: $(awk -v b="$BOOK_SHARE" 'BEGIN {printf "%.0f%% reads, %.0f%% bookings", (1 - b) * 100, b * 100}'); every client sends its next request when the answer arrives; levels: $LEVELS; ${LEVEL_SECONDS}s each after 10s of arriving"
+    record "- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)"
+    for ((ROUND = 1; ROUND <= ROUNDS; ROUND++)); do
+        concurrency_round
+    done
+}
+
 smoke() {
     say "smoke: fresh stack"
     reset_stack
@@ -249,7 +415,8 @@ smoke() {
 what=${1:-all}
 case $what in
     smoke | read | book | mixed | users | all) ;;
-    *) die "usage: loadtest/run.sh [smoke|read|book|mixed|users|all]" ;;
+    concurrency) COMPOSE_EXTRA=loadtest/compose.metrics.yaml ;;
+    *) die "usage: loadtest/run.sh [smoke|read|book|mixed|users|concurrency|all]" ;;
 esac
 for tool in docker k6 openssl jq curl basenc; do
     command -v "$tool" >/dev/null || die "$tool is not installed"
@@ -265,13 +432,14 @@ record "# Load test, $(date '+%Y-%m-%d %H:%M')"
 record ""
 record "- Commit $(git rev-parse --short HEAD)$([[ -n $(git status --porcelain -- src pom.xml) ]] && echo ' with uncommitted changes in src or pom.xml')"
 record "- $(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo), $(nproc) threads; app ${APP_CPUS:-2} CPU / 2 GB, PostgreSQL ${DB_CPUS:-2} CPU / 1 GB, Redis 1 CPU; pool ${POOL:-10}"
-record "- $(k6 version | head -1 | awk '{print $1, $2}') on the same machine; pass = p95 < 500 ms, failed < 1%, dropped < 1%"
+record "- $(k6 version | head -1 | awk '{print $1, $2}') on the same machine$([[ $what == concurrency ]] || echo '; pass = p95 < 500 ms, failed < 1%, dropped < 1%')"
 record "- Other containers running during the test: ${others:-none}"
 
 case $what in
     smoke) smoke ;;
     read | book | mixed) ladder "$what" ;;
     users) users_ladder ;;
+    concurrency) concurrency ;;
     all)
         ladder read
         ladder book

@@ -59,7 +59,7 @@ bench-cancel: ## Benchmark cancelling unpaid orders, 1 vs many orders per transa
 		-Dspring.datasource.hikari.maximum-pool-size=$(or $(POOL),40) $(if $(RUNS),-Dbench.runs=$(RUNS)) \
 		$(if $(SCALE),-Dbench.scale=$(SCALE)) $(if $(SIZES),-Dbench.sizes=$(SIZES)) $(if $(BOOKERS),-Dbench.bookers=$(BOOKERS))
 
-load-test: ## Load test the whole app over HTTP (Docker, k6): make load-test [PROFILE=smoke|read|book|mixed|users|all]
+load-test: ## Load test the whole app over HTTP (Docker, k6): make load-test [PROFILE=smoke|read|book|mixed|users|concurrency|all]
 	loadtest/run.sh $(or $(PROFILE),all)
 
 sale-day: ## 30 minutes of simulated buyers and bidders, then data checks: make sale-day [MINUTES=30] [BASE=300] [PEAK=1000] [BIDDERS=150]

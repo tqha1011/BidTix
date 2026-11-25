@@ -7,6 +7,12 @@
 # Knobs (environment): MINUTES (30), BASE and PEAK shoppers (300, 1000), BIDDERS (150), POOL, APP_CPUS, DB_CPUS,
 # KEEP=1 leaves the stack running afterwards.
 set -euo pipefail
+
+# A machine that goes to sleep ruins a run (the clocks jump and the tokens expire), so sleep is held off until the
+# script ends. The screen may still switch off and lock.
+if [[ -z ${LOADTEST_AWAKE:-} ]] && systemd-inhibit --what=sleep --why="load test" true 2>/dev/null; then
+    LOADTEST_AWAKE=1 exec systemd-inhibit --what=sleep --who="load test" --why="a load test is running" "$0" "$@"
+fi
 cd "$(dirname "$0")/.."
 
 MINUTES=${MINUTES:-30}
