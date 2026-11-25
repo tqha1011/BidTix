@@ -27,18 +27,20 @@ seat-hold or payment flow).
 - PostgreSQL (source of truth), Flyway (migrations); Redis is used as a cache (Spring Cache, `RedisCacheManager`,
   config in `CacheConfig` and `spring.cache.redis.*`); the booking fast-reject gate (`BookingGateway`) and rate limiting also use it
 - Self-issued JWT (access + rotating refresh token); the app verifies its own tokens as a resource server
-- Payment: `PaymentGateway` interface with a `MockPaymentGateway` that always succeeds (synchronous);
-  the real provider with asynchronous webhook callbacks is planned
+- Payment: VNPAY (sandbox by default), redirect to VNPAY's page and an asynchronous server-to-server callback (IPN).
+  Settings come from `VNP_TMNCODE`, `VNP_HASH_SECRET`, `VNP_URL`, `VNP_RETURN_URL` (`bidtix.payment.vnpay.*`); the IPN
+  URL is configured on VNPAY's side (`VNP_IPN_URL` is bound but not read by the code)
 - Lombok, springdoc-openapi (Swagger UI); the Micrometer Prometheus registry is on the classpath but its
   endpoint is not exposed yet
 - Tests: JUnit 5, Mockito, MockMvc, Spring Security test, Testcontainers (real Postgres; Docker is
   required to run the integration tests; `PostgresIntegrationTest` also starts a Redis container).
 
-> Status: schema (Flyway V1–V14), JPA entities, the `auth` module, global error handling, Testcontainers
-> and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats, mock payment, issue
-> tickets) are done, and so is the flow for **GENERAL_ADMISSION zones** (counter decrement). The booking
-> flow is exposed by `POST /api/v1/orders` (CUSTOMER, `OrderController`, 201 with the order; status PENDING_PAYMENT when the payment failed).
-> It needs an `Idempotency-Key` header (see **Idempotency**).
+> Status: schema (Flyway V1–V17), JPA entities, the `auth` module, global error handling, Testcontainers
+> and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats) and **GENERAL_ADMISSION zones**
+> (counter decrement) are done. Booking does not take payment: `POST /api/v1/orders` (CUSTOMER, `OrderController`, 201 with
+> the order, status PENDING_PAYMENT) needs an `Idempotency-Key` header (see **Idempotency**). The customer then pays with
+> `POST /api/v1/orders/{orderCode}/payments` (VNPAY URL, same header), and VNPAY's callback `GET /api/v1/payments/vnpay/ipn`
+> marks the order PAID and issues the tickets (see **Payment flow**).
 > Role-protected management endpoints exist (`@PreAuthorize`, roles come from the JWT `roles` claim):
 > `POST /venues` (ADMIN), `POST /events`, `POST /events/{id}/zones` (ORGANIZER; the zone call creates a
 > SEATED zone's seats in bulk) and `POST /events/{id}/publish` (ORGANIZER, owner only, DRAFT to PUBLISHED, needs a
@@ -52,7 +54,7 @@ seat-hold or payment flow).
 > `AuctionClosingJob` (every minute, one transaction per auction) closes a LIVE auction whose `ends_at` has passed: a winner (price and
 > at least the reserve) makes it AWAITING_PAYMENT with an AUCTION order and a rank-1 offer that share one deadline; no bid or a price
 > under the reserve makes it FAILED and puts the ticket back on sale (seat AVAILABLE, or +1 on the zone counter) and clears the gate flags.
-> `AuctionOfferExpiryJob` (every minute, one transaction per offer) handles an unpaid offer past its deadline: it cancels the AUCTION order (the
+> `AuctionOfferExpiryJob` (every minute, one transaction per offer) handles an unpaid offer past its deadline (plus the grace period when a payment is pending, see **Grace period**): it cancels the AUCTION order (the
 > only thing that does), and the right to buy passes to the highest bidder who has not had an offer, at their own highest bid and if it reaches
 > the reserve; with nobody left the auction FAILS like above. An order paid at the last moment makes the offer ACCEPTED and the auction SETTLED.
 > The shared steps (open an offer, fail an auction) are in `AuctionSettlementService`.
@@ -66,8 +68,9 @@ seat-hold or payment flow).
 > database (`BidRepository.findTopBids`, which reads every bid of the auction) with `ZADD GT`; a committed bid (`BidPlacedEvent`, `@TransactionalEventListener(AFTER_COMMIT)`)
 > raises that bidder's score only when the ZSET already exists (a Lua script), because a ZSET made of one bidder would look complete and never be rebuilt. Redis down:
 > reads fall back to the database and writes are ignored (fail-open).
-> Not started: event cancel and update, auction cancel, real payment provider and webhooks. Rate limits exist for login, register and logged-in callers; the other public routes need
-> `@RateLimited` when they are added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
+> Not started: event cancel and update, auction cancel, the refund job for REFUND_PENDING payments, the VNPAY return URL
+> endpoint, and querying VNPAY for payments left PENDING. Rate limits exist for login, register, the VNPAY callback and
+> logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list (a future cancel) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
 
 **Entity mapping conventions**
@@ -98,7 +101,7 @@ tagged `benchmark` and skipped. To reproduce a CI run locally: `make keys && ./m
 background job sets it (see `BookingGateRedisDownTest`).
 
 Swagger UI: `http://localhost:8080/swagger-ui/index.html` · OpenAPI: `/v3/api-docs`. Both are public,
-as is `/api/v1/auth/**`; every other route (including `/actuator/**`, where only `health` is exposed)
+as are `/api/v1/auth/**` and the VNPAY callback routes `/api/v1/payments/vnpay/{ipn,return}`; every other route (including `/actuator/**`, where only `health` is exposed)
 needs a Bearer token.
 
 **First-time setup: JWT signing keys** (the app will not start without them; `keys/` is git-ignored)
@@ -119,29 +122,30 @@ used token revokes all of that user's sessions (theft response); two parallel re
 token cannot both win (conditional `UPDATE ... WHERE revoked_at IS NULL`).
 
 **Booking flow** (`BookingService.bookTicket`, SEATED and GENERAL_ADMISSION zones, `POST /api/v1/orders`).
-Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) (seats),
-[ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md) (payment boundary) and
+Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md) (seats) and
 [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). The Redis refusal gate in front of it: [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md). At most
 `bidtix.booking.max-tickets-per-order` (5) tickets per order, and the zone must belong to the event. The
-method is deliberately **not** `@Transactional`; it runs three steps with `TransactionTemplate`, and returns a
-`BookingTicketSeatsResult` or a `BookingTicketQuantityResult` (both are a `BaseBookingTicketResult`):
-1. `reserve` (transaction): validate, insert a `PENDING_PAYMENT` order, then take the stock with one
+method runs one transaction with `TransactionTemplate` (the gate check and its flags stay outside it) and returns a
+`BookingTicketSeatsResult` or a `BookingTicketQuantityResult` (both are a `BaseBookingTicketResult`), PENDING_PAYMENT and
+without tickets:
+- `reserve` (transaction): validate, insert a `PENDING_PAYMENT` order, then take the stock with one
    conditional `UPDATE` whose row count is checked. SEATED: hold the seats, row count must equal the number
    of seats (ids sorted ascending); a short count throws `SEAT_UNAVAILABLE` with the lost `seatPublicIds`.
    GA: subtract the quantity from `available_quantity` where it is `>=` the quantity (the last write, because
    it locks the hot counter row); 0 rows throws `ZONE_SOLD_OUT`. Either way everything rolls back.
-2. `PaymentGateway.charge` (no transaction open). `MockPaymentGateway` always returns `true`. On `false`
-   the method returns the `PENDING_PAYMENT` result and the stock stays taken until the order expires.
-3. `completePayment` (transaction): order `PAID`; SEATED seats `HELD -> SOLD` (row count checked); tickets
-   issued (one per seat, or one per unit of a GA item). Tickets exist only for paid orders.
+- The stock stays taken until the order is paid (see **Payment flow**) or expires.
 
-**Booking gate** (`booking/infrastructure/BookingGateway`, `bidtix.booking.gate-enabled` / `gate-ttl-seconds`): before step 1,
+**Booking gate** (`booking/infrastructure/BookingGateway`, `bidtix.booking.gate-enabled` / `gate-ttl-seconds`): before `reserve`,
 `BookingService.rejectIfKnownUnavailable` asks Redis whether a recent request already learned that this quantity (GA) or these
 seats cannot be had, and refuses without opening a transaction. The flags are written only after the database refused
 (`rememberRejection`), live for a few seconds and can only refuse: a missing flag, an expired one or Redis down lets the request
 through (fail-open), and the conditional `UPDATE` still decides. Measured effect: `docs/benchmarks.md`, section "Booking gate on
 the real flow". **Whatever returns stock (the hold-expiry sweeper, giving GA quantity back, a cancel) must clear the matching
 flags after its database commit**, or customers are refused for up to the TTL.
+
+**Grace period** (`payment/service/ConfirmationGrace`, `bidtix.payment.confirmation-grace`, 10 m): an expired order with a
+`PENDING` payment is released only after the grace period, by both expiry jobs, because the provider's callback may still be
+on its way. The customer gets no extra time to pay. Whatever else releases the stock of an unpaid order must ask it too.
 
 **Unpaid orders** (`booking/infrastructure/OrderCancellationJob`, every minute after the last run ended): batches of 100 expired
 `PENDING_PAYMENT` **booking** order ids are read, and each batch is one transaction: lock the orders with `FOR UPDATE SKIP LOCKED`,
@@ -151,7 +155,26 @@ clears the gate flags of the zones and seats that got stock back. Auction orders
 owns its stock, and returning it here as well would return it twice (`AuctionOfferExpiryJob` cancels those orders). The status is `CANCELLED`, not `EXPIRED` (the enum value is unused).
 Why batches and not one transaction per order: [`docs/benchmarks.md`](docs/benchmarks.md), section "Cancelling unpaid orders".
 
-Open points: a real gateway needs a refund when step 3 fails after a successful charge (`TODO(payment)`).
+**Payment flow** (`payment` module; decisions: [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)).
+The module sees orders only through `PayableOrders`, which `booking` implements (`OrderPayment`).
+1. `POST /api/v1/orders/{orderCode}/payments` (CUSTOMER): `PaymentService.createUrlPayment` commits a `PENDING` payment with
+   a new `txn_ref` and returns the signed VNPAY URL, which closes no later than the order's deadline. `requested_at` keeps the
+   exact `vnp_CreateDate` sent (VNPAY's query and refund APIs ask for it).
+2. `GET /api/v1/payments/vnpay/ipn` (public, signed, rate limit `vnpay-ipn`; `VnpayCallbackController`):
+   `processVnPayResponse` checks the signature (`97`), stores the callback in `payment_webhook_events` (own transaction),
+   then in one transaction finds the payment (`01`), compares the amount (`04`), requires `PENDING` (`02`) and records the
+   result (`00`): `FAILED`, or `applyPayment` (order `PAID`, seats `HELD -> SOLD`, tickets issued, auction offer accepted and
+   auction settled) with `SUCCEEDED`, or `REFUND_PENDING` when the order cannot take the money. Anything unexpected: `99`.
+   VNPAY retries unless it gets `00` or `02`. The answer is `TransactionResponse` (`RspCode`, `Message`), never a
+   `ProblemDetail` once the request reaches the service.
+
+Refunds (job not written yet): take a payment with `PaymentRepository.markRefundRequested` (1 row = yours), commit, then call
+VNPAY outside any transaction; a marked payment is never requested again automatically.
+
+Rules for changing it: the payment's conditional `UPDATE` (row count checked) is the guard against processing twice, never
+the stored event; no refund or other VNPAY call inside the request's transaction; only the IPN confirms a payment, never the
+return URL. Open points: refund job, return URL endpoint, nothing scans events with `processed_at IS NULL` or asks VNPAY
+about payments left `PENDING`.
 
 ## Architecture
 
@@ -174,7 +197,8 @@ Errors:        any layer throws -> GlobalExceptionHandler (one place, one JSON f
 **Module rules**
 - A module may depend on `common`. Entities in different modules reference each other by id only (no JPA
   relations across modules), although the database still has the foreign keys.
-- No dependency cycles between modules. Today: `auth -> user, common, config` and `config -> user`.
+- No dependency cycles between modules. Today: `auth -> user, common, config`, `config -> user`, and `booking -> payment`
+  (it implements `PayableOrders`; `payment` never imports `booking`).
 - Known exception: `auth` uses the `user` module's `UserRepository` and `User` entity directly. When `user`
   gets its own service, move that access behind it. For new code, go through the other module's `service`.
 - Nothing enforces these rules automatically yet (ArchUnit or Spring Modulith would), so check them in review.
@@ -187,9 +211,9 @@ Package-by-feature under `com.bidtix`:
 auth/      controller, service, infrastructure, dtos, domain   done: register / login / refresh / logout
 user/      domain, infrastructure                              entity + repository only, no API yet
 event/     controller, dtos, service, infrastructure, domain   venue / event / zone+seats creation (organizer, admin)
-booking/   controller, domain, dto, service, infrastructure     booking flow (seated + GA), POST /orders, sweeper done
+booking/   controller, domain, dtos, service, infrastructure    booking flow (seated + GA), POST /orders, sweeper, paying orders
 auction/   controller, dtos, service, infrastructure, domain    create + activation + closing + offer expiry + bids done
-payment/   domain, service, infrastructure                     PaymentGateway + mock; webhook inbox entity (real provider planned)
+payment/   controller, dtos, service, infrastructure, domain    VNPAY payment URL + IPN callback + webhook inbox (no refunds yet)
 common/    domain (BaseEntity), utils, idempotency             shared by every module
 config/    security, exceptions, ClockConfig                   cross-cutting Spring setup, see below
 ```
@@ -206,9 +230,6 @@ Layers inside a feature (create only the ones that are needed):
 JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `UserPrincipal`),
 `config/exceptions` (`ErrorCode`, `BusinessException`, `GlobalExceptionHandler`) and `ClockConfig` (the
 `Clock` bean; inject it instead of calling `Instant.now()` so tests can fix the time).
-
-Known inconsistency: `booking` names its DTO package `dto/` for the booking flow but `dtos/` for the admin
-ticket list (auth uses `dtos/`). New code follows the layer list above; move `dto/` when touching it.
 
 ## Rules (must follow)
 
@@ -255,10 +276,11 @@ ticket list (auth uses `dtos/`). New code follows the layer list above; move `dt
 - `POST /orders`, `POST /auctions/{id}/bids` and `POST /orders/{code}/payments` require an
   `Idempotency-Key` header (stored in `idempotency_keys`; same key + different body returns 422,
   in-flight duplicate returns 409, completed duplicate replays the stored response).
-- Payment webhooks are deduplicated by `(provider, provider_event_id)` in `payment_webhook_events`.
+- Payment webhooks are stored once per `(provider, provider_event_id)` in `payment_webhook_events`; processing them twice is
+  prevented by the payment's status (conditional `UPDATE`), not by that row (see **Payment flow**).
 - `IdempotencyFilter` (`common/idempotency`) enforces it. It runs after the Spring Security chain (keys belong to a user) and
-  only on the POST routes listed in `bidtix.idempotency.paths` (today `/api/v1/auctions/*/bids` and `/api/v1/orders`; add the
-  payment route when it exists). It claims the key with `INSERT ... ON CONFLICT DO NOTHING` (committed before the request runs), runs the
+  only on the POST routes listed in `bidtix.idempotency.paths` (today `/api/v1/auctions/*/bids`, `/api/v1/orders` and
+  `/api/v1/orders/*/payments`). It claims the key with `INSERT ... ON CONFLICT DO NOTHING` (committed before the request runs), runs the
   request and stores the response **only for a 2xx**; a failure deletes the key so a retry runs again. Missing or too long header:
   400; same key, other body: 422 `IDEMPOTENCY_KEY_REUSED`; duplicate still running: 409 `IDEMPOTENCY_REQUEST_IN_PROGRESS`; a replay
   carries `Idempotent-Replayed: true`. A key stuck `PROCESSING` for `processing-timeout` is taken as abandoned. The claim and the
@@ -275,7 +297,8 @@ ticket list (auth uses `dtos/`). New code follows the layer list above; move `dt
 - Counters live in Redis (one Lua script each), configured under `bidtix.rate-limit.policies` in application.yaml.
   A policy is `fixed-window` (`limit`, `window`) or `token-bucket` (`capacity`, `refill-tokens`, `refill-every`; the
   refill is worked out when a request arrives, there is no background job), plus `fail-open`. Today: login and
-  register are fixed windows per IP, `default-user` is a bucket of 15 tokens refilled by 3 every 10 s. `RateLimitInterceptor` runs after Spring Security, on `/api/**`: a controller
+  register are fixed windows per IP, `default-user` is a bucket of 15 tokens refilled by 3 every 10 s, `vnpay-ipn` is a wide
+  fail-open bucket per IP (100, refilled by 20 every second). `RateLimitInterceptor` runs after Spring Security, on `/api/**`: a controller
   method or class with `@RateLimited(policy = ..., by = IP|USER)` uses that policy; otherwise a logged-in caller gets
   `default-user`. Too many requests: 429 `TOO_MANY_REQUESTS` with `Retry-After`; Redis unreachable: fail-open policies
   let the request through, fail-closed ones answer 503 `RATE_LIMITER_UNAVAILABLE` (keep login and register fail-closed).

@@ -8,6 +8,7 @@ import com.bidtix.auction.service.AuctionSettlementService;
 import com.bidtix.auction.service.AuctionSettlementService.Returned;
 import com.bidtix.booking.domain.OrderStatus;
 import com.bidtix.booking.infrastructure.OrderRepository;
+import com.bidtix.payment.service.ConfirmationGrace;
 import jakarta.annotation.Nullable;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -29,6 +30,8 @@ import java.util.List;
  *       their own highest bid, as the next rank, if that bid reaches the reserve;</li>
  *   <li>with nobody left the auction FAILS and its ticket goes back on sale (see {@link AuctionSettlementService}).</li>
  * </ol>
+ * An offer whose order has a payment still waiting for the provider's callback is left open for a grace period after its
+ * deadline (see {@link ConfirmationGrace}); the callback accepts it only if the customer paid before the deadline.
  * The old offer is EXPIRED before the new one is inserted, because at most one offer per auction may be PENDING.
  * The orders of AUCTION offers are not touched by {@code OrderCancellationJob}, so this job is the only thing that
  * cancels them. After the commit of a FAILED auction the booking gate flags of the ticket that came back are cleared.
@@ -46,6 +49,7 @@ public class AuctionOfferExpiryJob {
     private final BidRepository bidRepository;
     private final AuctionSettlementService settlement;
     private final TransactionTemplate transactionTemplate;
+    private final ConfirmationGrace confirmationGrace;
     private final Clock clock;
 
     /** What handling one offer produced; {@code returned} is set only when a ticket went back on sale. */
@@ -90,6 +94,11 @@ public class AuctionOfferExpiryJob {
         Instant now = clock.instant();
         AuctionOffer offer = auctionOfferRepository.lockExpiredPendingOffer(offerId, now).orElse(null);
         if (offer == null) {
+            return null;
+        }
+        // a payment may have been made in time and not be confirmed yet: leave the offer open for the callback
+        if (offer.getExpiresAt().isAfter(confirmationGrace.cutoff(now))
+                && !confirmationGrace.ordersAwaitingConfirmation(List.of(offer.getOrderId())).isEmpty()) {
             return null;
         }
         Auction auction = auctionRepository.findById(offer.getAuction().getId())

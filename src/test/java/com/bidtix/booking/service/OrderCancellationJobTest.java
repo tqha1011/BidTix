@@ -70,6 +70,49 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
         }
     }
 
+    // ---- an order whose payment may still be confirmed (bidtix.payment.confirmation-grace: 10m) --------
+
+    @Test
+    void anExpiredOrderWithAPendingPayment_keepsItsStockDuringTheGracePeriod() {
+        Fixture f = fixture(10, 2);
+        String paying = bookQuantity(f, f.userIds().get(0), 3);
+        String abandoned = bookQuantity(f, f.userIds().get(1), 2);
+        payment(paying, "PENDING");
+        expire(paying);
+        expire(abandoned);
+
+        job.cancelExpiredOrders();   // both are in the same batch
+
+        assertThat(statusOf(paying)).isEqualTo("PENDING_PAYMENT");
+        assertThat(statusOf(abandoned)).as("nobody tried to pay it: no grace").isEqualTo("CANCELLED");
+        assertThat(available(f)).isEqualTo(7);
+    }
+
+    @Test
+    void anOrderWithAPendingPayment_isCancelledOnceTheGracePeriodIsOver() {
+        Fixture f = fixture(10, 1);
+        String code = bookQuantity(f, f.userIds().get(0), 3);
+        payment(code, "PENDING");
+        jdbc.update("update orders set expires_at = now() - interval '11 minutes' where order_code = ?", code);
+
+        job.cancelExpiredOrders();
+
+        assertThat(statusOf(code)).isEqualTo("CANCELLED");
+        assertThat(available(f)).isEqualTo(10);
+    }
+
+    @Test
+    void anExpiredOrderWhosePaymentFailed_getsNoGrace() {
+        Fixture f = fixture(10, 1);
+        String code = bookQuantity(f, f.userIds().get(0), 3);
+        payment(code, "FAILED");
+        expire(code);
+
+        job.cancelExpiredOrders();
+
+        assertThat(statusOf(code)).isEqualTo("CANCELLED");
+    }
+
     @Test
     void anOrderStillInItsPaymentWindow_isLeftAlone() {
         Fixture f = fixture(10, 1);
@@ -225,6 +268,13 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
 
     private void expire(String orderCode) {
         jdbc.update("update orders set expires_at = now() - interval '1 minute' where order_code = ?", orderCode);
+    }
+
+    /** A VNPAY payment attempt of the order in this status. */
+    private void payment(String orderCode, String status) {
+        jdbc.update("insert into payments (order_id, provider, txn_ref, amount, status) "
+                        + "select id, 'VNPAY', ?, total_amount, ? from orders where order_code = ?",
+                UUID.randomUUID().toString().replace("-", ""), status, orderCode);
     }
 
     private String statusOf(String orderCode) {

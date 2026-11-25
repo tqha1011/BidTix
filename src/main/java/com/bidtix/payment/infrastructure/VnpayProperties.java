@@ -22,7 +22,10 @@ public record VnpayProperties(
         @DefaultValue("https://sandbox.vnpayment.vn/paymentv2/vpcpay.html") String payUrl,
         @DefaultValue("http://localhost:8080/api/v1/payments/vnpay/return") String returnUrl,
         @DefaultValue("http://localhost:8080/api/v1/payments/vnpay/ipn") String ipnUrl,
+        @DefaultValue("https://sandbox.vnpayment.vn/merchant_webapi/api/transaction") String refundUrl,
         @DefaultValue("2.1.0") String version,
-        @DefaultValue("pay") String command,
+        @DefaultValue("pay") String commandPay,
+        @DefaultValue("refund") String commandRefund,
+        @DefaultValue("querydr") String commandQuery,
         @DefaultValue("15") int expireMinutes) {
 }

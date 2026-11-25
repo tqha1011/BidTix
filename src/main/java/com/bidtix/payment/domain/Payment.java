@@ -13,6 +13,7 @@ import lombok.NoArgsConstructor;
 import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Getter
@@ -47,6 +48,21 @@ public class Payment extends AuditableEntity {
     @Column(name = "currency", nullable = false, updatable = false, length = 3)
     private String currency = "VND";
 
+    /**
+     * The creation time sent to the provider (VNPAY's vnp_CreateDate), to the second; its query and refund APIs ask for
+     * it. Null only for payments made before it was stored.
+     */
+    @Column(name = "requested_at", updatable = false)
+    private Instant requestedAt;
+
+    /**
+     * When this payment was taken to be refunded, null until then. Set only by
+     * {@code PaymentRepository.markRefundRequested}, before the provider is asked; it says the request may have been
+     * sent, not that the money is back.
+     */
+    @Column(name = "refund_requested_at")
+    private Instant refundRequestedAt;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private PaymentStatus status = PaymentStatus.PENDING;
@@ -63,10 +79,11 @@ public class Payment extends AuditableEntity {
     @Column(name = "version", nullable = false)
     private long version;
 
-    public Payment(Long orderId, PaymentProvider provider, String txnRef, long amount) {
+    public Payment(Long orderId, PaymentProvider provider, String txnRef, long amount, Instant requestedAt) {
         this.orderId = orderId;
         this.provider = provider;
         this.txnRef = txnRef;
         this.amount = amount;
+        this.requestedAt = requestedAt;
     }
 }

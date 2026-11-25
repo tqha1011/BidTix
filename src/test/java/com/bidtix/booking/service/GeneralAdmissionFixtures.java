@@ -17,13 +17,13 @@ import java.util.List;
 import java.util.UUID;
 
 /** Test data for standing-zone bookings. Every call creates its own event, zones and users. */
-final class GeneralAdmissionFixtures {
+public final class GeneralAdmissionFixtures {
 
     /**
      * An event with a GA zone of {@code capacity} tickets, plus: a SEATED zone with 6 seats in the same
      * event, and a GA zone that belongs to a different event.
      */
-    record Fixture(UUID eventId, UUID zoneId, long zoneDbId, long price,
+    public record Fixture(UUID eventId, UUID zoneId, long zoneDbId, long price,
                    UUID seatedZoneId, List<UUID> seatedSeatIds,
                    UUID otherEventZoneId, List<UUID> userIds) {
     }
@@ -31,7 +31,7 @@ final class GeneralAdmissionFixtures {
     private GeneralAdmissionFixtures() {
     }
 
-    static Fixture create(EntityManager em, TransactionTemplate tx, int capacity, int userCount) {
+    public static Fixture create(EntityManager em, TransactionTemplate tx, int capacity, int userCount) {
         String run = UUID.randomUUID().toString().substring(0, 8);
         return tx.execute(status -> {
             User organizer = new User("organizer-" + run + "@test.dev", "hash", "Organizer", UserRole.ORGANIZER);

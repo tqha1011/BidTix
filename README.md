@@ -22,27 +22,25 @@ The goal is to get the hard backend problems right rather than to build a big fe
 no overselling, no double-sold seats, no lost bids, safe client retries, short and correct transactions,
 and caching that never decides who gets a ticket.
 
-> **Status: work in progress.** The foundation (database schema, entities, authentication, error handling,
-> Redis cache and rate limiting) and the booking flow are done and tested against a real PostgreSQL and Redis:
-> numbered seats (hold, mock payment, tickets) and standing zones (a counter decrement), a Redis gate that
-> refuses known sold-out requests early, and a job that returns the stock of unpaid orders. Organizers can
-> create and publish events, and logged-in users can browse them. The booking flow has no HTTP endpoint yet,
-> and auctions (only the entities exist), the idempotency filter and the real payment provider are not
-> implemented. See [Roadmap](#roadmap) for exactly what exists.
+> **Status: work in progress.** Done and tested against a real PostgreSQL and Redis: authentication, event
+> management and browsing, booking of numbered seats and standing zones (with a Redis gate that refuses known
+> sold-out requests early and a job that returns the stock of unpaid orders), auctions (bidding, closing,
+> second-chance offers, leaderboard), idempotent retries, and VNPAY payments confirmed by its callback. Still
+> missing: refunds, the payment return page, and a run against the VNPAY sandbox. See [Roadmap](#roadmap).
 
 ## What it demonstrates
 
 | Problem | Approach | State |
 |---|---|---|
 | Two people buy the last seat | Conditional `UPDATE ... WHERE status = 'AVAILABLE'` + affected-row check; partial unique index on active tickets as the last line of defence ([ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md)) | **Done for seated zones** (30 parallel users, 1 seat: 1 wins; 60 users on 10 seats: no seat sold twice, no deadlock) |
-| Payment call must not hold the database | Reserve in one transaction, charge with no transaction open, then complete in a second one ([ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md)) | Done with a mock provider |
+| Payment results arrive late, twice, or for a dead order | Booking only reserves; VNPAY's signed callback applies the money once (conditional `UPDATE` on the payment), stores every authentic callback, and marks money that cannot be applied for refund ([ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)) | **Done** (8 identical callbacks in parallel: paid once); refunds planned, not yet run against the sandbox |
 | Overselling standing tickets | Atomic `UPDATE ... SET available = available - n WHERE available >= n` + `CHECK (available BETWEEN 0 AND capacity)` | Done: `UPDATE ... WHERE available_quantity >= n` + row count, concurrency test ([ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md)) |
-| Concurrent bids | One conditional `UPDATE` on the auction row (price, bid count, anti-sniping extension), `UNIQUE (auction_id, amount)` | Schema done, flow planned |
-| Client retries a request | `Idempotency-Key` header, request hash, replayed response | Table done, flow planned |
+| Concurrent bids | One conditional `UPDATE` on the auction row (price, bid count, anti-sniping extension), `UNIQUE (auction_id, amount)` | **Done**, concurrency test |
+| Client retries a request | `Idempotency-Key` header, request hash, replayed response | **Done** for orders, payments and bids |
 | Stolen refresh token | Rotation + reuse detection; parallel use of one token decided by a conditional `UPDATE` (verified with 10 simultaneous requests: 1 wins, 9 rejected) | **Done** |
 | Consistent error responses | RFC 9457 `ProblemDetail` + stable error codes, also for 401/403 raised inside security filters | **Done** |
 | Most requests lose once an event sells out | A short-lived Redis flag refuses requests already known to fail, before any transaction opens. It can only refuse: a missing flag or Redis down lets the request through and the conditional `UPDATE` decides ([ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md)) | **Done**, measured in [docs/benchmarks.md](docs/benchmarks.md) |
-| Unpaid orders keep stock locked, across several instances | `@Scheduled` job: batches of expired orders locked with `SELECT ... FOR UPDATE SKIP LOCKED`, stock returned in the same transaction, gate flags cleared after the commit | **Done for booking orders**; auction closing and offer expiry planned |
+| Unpaid orders keep stock locked, across several instances | `@Scheduled` job: batches of expired orders locked with `SELECT ... FOR UPDATE SKIP LOCKED`, stock returned in the same transaction, gate flags cleared after the commit | **Done**, also for auction closing and offer expiry |
 | Hot reads | Redis cache-aside with explicit TTLs, evicted on write; locking cache writer so 16 simultaneous misses cause one database load | **Done** (venue, published event list) |
 | Abuse and floods | Redis rate limits: fixed window per IP for login and register, token bucket per logged-in user; fail-closed for auth | **Done** |
 
@@ -56,9 +54,9 @@ split into business modules by feature (package-by-feature). Inside each module 
                       one Spring Boot application, one PostgreSQL database
  ┌──────────────────────────────────────────────────────────────────────────────────┐
  │  auth     user     event     booking     auction     payment     │   common      │
- │  (done)   (entity) (create,  (seats + GA (entity)    (mock)      │   config      │
- │                    publish)  flow, gate,                         │  (shared)     │
- │                              cancel job)                         │               │
+ │  (done)   (entity) (create,  (seats + GA (bids,      (VNPAY,     │   config      │
+ │                    publish)  flow, gate, closing,    callback)   │  (shared)     │
+ │                              cancel job) offers)                 │               │
  │   each module:   controller ──► service ──► repository ──► DB                    │
  │                  (HTTP, DTOs)  (@Transactional, rules)   (Spring Data)           │
  │                                    │                                             │
@@ -147,6 +145,10 @@ Read endpoints for any logged-in user (cached in Redis with a short TTL):
 | `GET /api/v1/venues/{venuePublicId}` | `200`, one venue |
 | `GET /api/v1/events?page=&size=` | `200`, published events that have not started yet, soonest first |
 
+Paying: `POST /api/v1/orders` (CUSTOMER) reserves, `POST /api/v1/orders/{orderCode}/payments` returns the VNPAY page
+(both need an `Idempotency-Key` header), and VNPAY confirms through `GET /api/v1/payments/vnpay/ipn`. Set
+`VNP_TMNCODE` and `VNP_HASH_SECRET` from a sandbox account; the IPN URL (public, HTTPS) is configured on VNPAY's side.
+
 Rate limits: login 5 per minute and register 3 per minute (per IP, `429 TOO_MANY_REQUESTS` with `Retry-After`);
 other logged-in calls share a bucket of 15 requests refilled by 3 every 10 s. Details in `bidtix.rate-limit.policies`.
 
@@ -182,7 +184,7 @@ started by Testcontainers, with Flyway building the schema. The context smoke te
 Other integration tests cover the Redis booking gate (including Redis being down: the flow still sells correctly),
 the unpaid-order cancellation job, the published event list and the rate limiter.
 
-These tests check correctness, not throughput or latency, and they do not cover failed payments yet. Throughput
+These tests check correctness, not throughput or latency. Throughput
 is measured separately and is tagged `benchmark`, so `make test` skips it:
 
 ```bash
@@ -198,35 +200,37 @@ Method, numbers and caveats: [`docs/benchmarks.md`](docs/benchmarks.md).
 - [`docs/database-schema.md`](docs/database-schema.md): tables, constraints, and the concurrency strategy
 - [`docs/ADR/`](docs/ADR): architecture decision records
   - [ADR-0001](docs/ADR/0001-hold-seats-with-a-conditional-update.md): hold seats with a conditional UPDATE
-  - [ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md): take payment outside the transaction, issue tickets after it
+  - [ADR-0002](docs/ADR/0002-take-payment-outside-the-transaction.md): take payment outside the transaction (superseded by ADR-0005)
   - [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md): take standing-zone stock with a conditional UPDATE
   - [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md): refuse known sold-out requests with a short-lived Redis flag
+  - [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md): confirm VNPAY payments in the IPN callback
 - [`docs/benchmarks.md`](docs/benchmarks.md): anti-overselling strategies, the booking gate and order cancellation, measured
 - [`CLAUDE.md`](CLAUDE.md): conventions and rules for working in this repository
 
 ## Roadmap
 
-- [x] Database schema (Flyway migrations V1–V14 by module) and JPA entities
+- [x] Database schema (Flyway migrations V1–V17 by module) and JPA entities
 - [x] Authentication: register, login, refresh with rotation, logout, refresh token in a cookie
 - [x] Global error handling
 - [x] Testcontainers (Postgres) and a working context test
-- [x] Booking service for seated zones: seat holds, mock payment, tickets issued after payment (no HTTP endpoint yet)
+- [x] Booking service for seated zones: seat holds, tickets issued after payment
 - [x] Concurrency tests for seat booking (N parallel requests, assert invariants)
 - [x] ADRs for the seat hold and the payment boundary
 - [x] Venue / event / zone+seats creation and the admin ticket list, with role checks
 - [x] Event publish and browse API (cached)
-- [ ] Booking endpoint (`POST /orders`)
+- [x] Booking endpoint (`POST /orders`)
 - [x] Booking of standing zones: counter decrement, 5 tickets per order, concurrency tests
 - [x] Booking: unpaid-order cancellation job (seats and standing quantity returned, `SKIP LOCKED`)
 - [ ] Booking: per-user ticket limit
 - [x] Benchmarks of five anti-overselling strategies, the booking gate and order cancellation, [docs/benchmarks.md](docs/benchmarks.md)
 - [ ] Reproduce overselling with a naive flow, then fix it (ADR)
 - [x] Redis: cache-aside, rate limiting, booking gate ([ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md))
-- [ ] Idempotency-Key filter
-- [ ] Real payment provider: idempotent webhooks, refund when a paid order cannot be fulfilled
-- [ ] Auctions: bidding, anti-sniping, closing job, second-chance offers (entities exist)
+- [x] Idempotency-Key filter
+- [x] VNPAY: payment URL and idempotent callback, with every authentic callback stored
+- [ ] VNPAY: refunds for paid orders that cannot be fulfilled, return page, run against the sandbox
+- [x] Auctions: bidding, anti-sniping, closing job, second-chance offers, leaderboard
 - [ ] Event cancel and update (must evict the event cache and clear the gate flags)
-- [ ] Concurrency tests for the remaining flows (bids, payment failures)
+- [x] Concurrency tests for bids and payment callbacks
 - [ ] Observability: expose a secured `/actuator/prometheus` (only `health` is exposed today)
 
 ## License

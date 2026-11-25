@@ -12,6 +12,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -68,6 +69,18 @@ class PaymentServiceTest extends PostgresIntegrationTest {
         Instant created = vietnam(url.get("vnp_CreateDate"));
         assertThat(created).isBetween(before.minusSeconds(2), Instant.now().plusSeconds(2));
         assertThat(vietnam(url.get("vnp_ExpireDate"))).isAfter(created);
+    }
+
+    @Test
+    void theCreationTimeSentToVnpayIsStoredExactly_forARefundLater() {
+        Buyer buyer = order("PENDING_PAYMENT", "30 minutes", 1_000);
+
+        Map<String, String> url = parse(service.createUrlPayment(buyer.orderCode(), buyer.publicId(), "203.0.113.7"));
+
+        Timestamp stored = jdbc.queryForObject("select requested_at from payments where order_id = ?", Timestamp.class,
+                buyer.orderId());
+        // to the second, with nothing after it: the same value vnp_CreateDate carries
+        assertThat(stored.toInstant()).isEqualTo(vietnam(url.get("vnp_CreateDate")));
     }
 
     @Test
