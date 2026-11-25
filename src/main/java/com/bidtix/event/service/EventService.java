@@ -22,6 +22,8 @@ import com.bidtix.event.infrastructure.VenueRepository;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.infrastructure.UserRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.domain.PageRequest;
@@ -37,6 +39,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class EventService {
@@ -216,12 +219,39 @@ public class EventService {
         return EventResponse.from(eventRepository.saveAndFlush(event));
     }
 
+    /**
+     * Removes a DRAFT with its zones and seats, in one transaction, with the event row locked so it cannot be published
+     * meanwhile. A draft that already has an order is refused ({@code EVENT_NOT_EDITABLE}) and stays whole: the foreign
+     * keys decide. The public list never showed it, so there is nothing to evict.
+     */
+    @Transactional
+    public void delete(UUID organizerPublicId, UUID eventPublicId) {
+        Event event = requireOwner(organizerPublicId, eventRepository.findByPublicIdForUpdate(eventPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND)));
+        if (event.getStatus() != EventStatus.DRAFT) {
+            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE);
+        }
+        try {
+            seatRepository.deleteByEventId(event.getId());
+            ticketZoneRepository.deleteByEventId(event.getId());
+            eventRepository.delete(event);
+            eventRepository.flush();
+        } catch (DataIntegrityViolationException e) {
+            log.info("Draft event {} is referenced and cannot be deleted: {}", eventPublicId,
+                    e.getMostSpecificCause().getMessage());
+            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE, "The event already has orders and cannot be deleted");
+        }
+    }
+
     /** The caller's event. Call it inside a transaction. */
     private Event findOwnEvent(UUID organizerPublicId, UUID eventPublicId) {
+        return requireOwner(organizerPublicId, eventRepository.findByPublicId(eventPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND)));
+    }
+
+    private Event requireOwner(UUID organizerPublicId, Event event) {
         User organizer = userRepository.findByPublicId(organizerPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
-        Event event = eventRepository.findByPublicId(eventPublicId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
         if (!event.getOrganizerId().equals(organizer.getId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }

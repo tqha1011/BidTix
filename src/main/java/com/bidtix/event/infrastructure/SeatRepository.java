@@ -98,6 +98,11 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
     /** All seats of a zone, as a seat map shows them: by row, then seat number. */
     List<Seat> findByZoneIdOrderByRowLabelAscSeatNumberAsc(Long zoneId);
 
+    /** Removes every seat of the event's zones; for deleting a draft. */
+    @Modifying
+    @Query("delete from Seat s where s.zone.id in (select z.id from TicketZone z where z.event.id = :eventId)")
+    int deleteByEventId(Long eventId);
+
     interface ZoneSeats {
         Long getZoneId();
 

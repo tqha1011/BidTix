@@ -16,6 +16,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -75,6 +76,17 @@ public class EventController {
     public EventResponse update(@PathVariable UUID eventPublicId, @Valid @RequestBody UpdateEventRequest request,
                                 Principal principal) {
         return eventService.update(CurrentUser.publicId(principal), eventPublicId, request);
+    }
+
+    /**
+     * Deletes a draft with its zones and seats: 204. 409 {@code EVENT_NOT_EDITABLE} when it is not a draft or already has
+     * orders. Only its organizer.
+     */
+    @DeleteMapping("/{eventPublicId}")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public ResponseEntity<Void> delete(@PathVariable UUID eventPublicId, Principal principal) {
+        eventService.delete(CurrentUser.publicId(principal), eventPublicId);
+        return ResponseEntity.noContent().build();
     }
 
     /** The logged-in organizer's own events, drafts included, newest first. */

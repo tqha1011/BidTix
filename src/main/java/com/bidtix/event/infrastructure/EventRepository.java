@@ -5,7 +5,9 @@ import com.bidtix.event.domain.EventStatus;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.EntityGraph;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 
@@ -23,6 +25,14 @@ public interface EventRepository extends JpaRepository<Event, Long> {
      */
     @EntityGraph(attributePaths = "venue")
     Page<Event> findByStatusAndStartsAtAfter(EventStatus status, Instant after, Pageable pageable);
+
+    /**
+     * The event with its row locked until the transaction ends ({@code FOR UPDATE}). Everything that changes what a
+     * draft consists of takes this lock first, so it cannot happen while the draft is being published or deleted.
+     */
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("select e from Event e where e.publicId = :publicId")
+    Optional<Event> findByPublicIdForUpdate(UUID publicId);
 
     /** One organizer's events, whatever their status. The venue is fetched in the same query, as above. */
     @EntityGraph(attributePaths = "venue")

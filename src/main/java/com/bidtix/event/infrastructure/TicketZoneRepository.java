@@ -15,6 +15,11 @@ public interface TicketZoneRepository extends JpaRepository<TicketZone, Long> {
 
     boolean existsByEventId(Long eventId);
 
+    /** Removes the event's zones (their seats first); for deleting a draft. */
+    @Modifying
+    @Query("delete from TicketZone z where z.event.id = :eventId")
+    int deleteByEventId(Long eventId);
+
     /** The zones of an event, in the order they were created. */
     List<TicketZone> findByEventIdOrderById(Long eventId);
 
