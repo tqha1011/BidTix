@@ -83,7 +83,14 @@ public class AuctionSettlementService {
      */
     public Returned fail(Auction auction, AuctionStatus expected, Instant now) {
         changeStatus(auction, expected, AuctionStatus.FAILED, now);
+        return returnTicket(auction);
+    }
 
+    /**
+     * Puts the auctioned ticket back on sale. Only for the transaction that has just ended the auction without a sale,
+     * so it happens once. Returns which gate flags that makes out of date, for {@link #clearGate} after the commit.
+     */
+    public Returned returnTicket(Auction auction) {
         UUID zonePublicId = ticketZoneRepository.findPublicIdByid(auction.getZoneId())
                 .orElseThrow(() -> new IllegalStateException("Zone " + auction.getZoneId() + " of auction "
                         + auction.getId() + " not found"));

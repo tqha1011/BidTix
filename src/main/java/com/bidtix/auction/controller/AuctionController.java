@@ -40,6 +40,16 @@ public class AuctionController {
                 .body(auctionService.createAuction(CurrentUser.publicId(principal), request));
     }
 
+    /**
+     * Calls off an auction nobody has bid on (SCHEDULED, or LIVE without bids) and puts its ticket back on sale. 409
+     * {@code AUCTION_NOT_CANCELLABLE} otherwise. Only the event's organizer.
+     */
+    @PostMapping("/{auctionPublicId}/cancel")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public AuctionResponse cancel(@PathVariable UUID auctionPublicId, Principal principal) {
+        return auctionService.cancelAuction(CurrentUser.publicId(principal), auctionPublicId);
+    }
+
     /** One auction; 404 {@code AUCTION_NOT_FOUND}. */
     @GetMapping("/{auctionPublicId}")
     public AuctionResponse get(@PathVariable UUID auctionPublicId) {

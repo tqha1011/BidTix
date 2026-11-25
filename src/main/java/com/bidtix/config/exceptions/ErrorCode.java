@@ -52,6 +52,7 @@ public enum ErrorCode {
 
     // --- auction ---
     AUCTION_NOT_FOUND(HttpStatus.NOT_FOUND, "Auction not found"),
+    AUCTION_NOT_CANCELLABLE(HttpStatus.CONFLICT, "Only an auction nobody has bid on can be cancelled"),
     EVENT_NOT_PUBLISHED(HttpStatus.CONFLICT, "Only a PUBLISHED event can have auctions"),
     INVALID_MONEY_BID(HttpStatus.BAD_REQUEST, "Bid amount is too low"),
     BID_NO_LONGER_AVAILABLE(HttpStatus.BAD_REQUEST, "The bid is no longer available");

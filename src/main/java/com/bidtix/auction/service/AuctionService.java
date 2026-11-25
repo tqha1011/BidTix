@@ -29,6 +29,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.util.HashMap;
@@ -49,6 +50,8 @@ public class AuctionService {
 
     private final AuctionRepository auctionRepository;
     private final BidRepository bidRepository;
+    private final AuctionSettlementService settlement;
+    private final TransactionTemplate transactionTemplate;
     private final EventRepository eventRepository;
     private final TicketZoneRepository zoneRepository;
     private final SeatRepository seatRepository;
@@ -152,6 +155,32 @@ public class AuctionService {
 
         return PageResponse.from(auctions.map(a -> AuctionResponse.from(a, eventIds.get(a.getEventId()),
                 zoneIds.get(a.getZoneId()), a.getSeatId() == null ? null : seatIds.get(a.getSeatId()))));
+    }
+
+    /**
+     * The organizer calls an auction off while nobody has bid: CANCELLED, and its ticket back on sale in the same
+     * transaction. An auction with a bid, or past its bidding, is {@code AUCTION_NOT_CANCELLABLE}: bidders were promised
+     * a result. The booking gate flags are cleared after the commit.
+     */
+    public AuctionResponse cancelAuction(UUID organizerPublicId, UUID auctionPublicId) {
+        record Cancelled(AuctionResponse auction, AuctionSettlementService.Returned returned) {
+        }
+        Cancelled cancelled = transactionTemplate.execute(status -> {
+            Auction auction = findAuction(auctionPublicId);
+            User organizer = userRepository.findByPublicId(organizerPublicId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
+            Event event = eventRepository.findById(auction.getEventId()).orElseThrow();
+            if (!event.getOrganizerId().equals(organizer.getId())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN);
+            }
+            if (auctionRepository.cancelWithoutBids(auction.getId(), clock.instant()) != 1) {
+                throw new BusinessException(ErrorCode.AUCTION_NOT_CANCELLABLE);
+            }
+            AuctionSettlementService.Returned returned = settlement.returnTicket(auction);
+            return new Cancelled(getAuction(auctionPublicId), returned);
+        });
+        settlement.clearGate(cancelled.returned());
+        return cancelled.auction();
     }
 
     /** One auction, as the list shows it. */
