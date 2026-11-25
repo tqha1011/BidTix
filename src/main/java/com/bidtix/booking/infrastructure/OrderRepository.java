@@ -1,6 +1,10 @@
 package com.bidtix.booking.infrastructure;
 
 import com.bidtix.booking.domain.Order;
+import com.bidtix.booking.dtos.OrderItemResponse;
+import com.bidtix.booking.dtos.OrderSummaryResponse;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import com.bidtix.booking.domain.OrderStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
@@ -88,4 +92,42 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             "join User u on o.userId = u.id " +
             "where o.orderCode = :orderCode and u.publicId = :userPublicId")
     Optional<Order> findByOrderCodeAndUserId(String orderCode, UUID userPublicId);
+
+    // Read models for the customer's own orders. Like the admin ticket list they join other modules' entities by id and
+    // select straight into the DTO: one query, no N+1.
+
+    @Query(value = """
+            select new com.bidtix.booking.dtos.OrderSummaryResponse(o.orderCode, o.source, o.status, o.totalAmount,
+                o.currency, o.createdAt, o.expiresAt, o.paidAt, e.publicId, e.title)
+            from Order o
+            join Event e on e.id = o.eventId
+            join User u on u.id = o.userId
+            where u.publicId = :userPublicId
+            order by o.id desc
+            """,
+            countQuery = "select count(o) from Order o join User u on u.id = o.userId where u.publicId = :userPublicId")
+    Page<OrderSummaryResponse> findSummariesOfUser(@Param("userPublicId") UUID userPublicId, Pageable pageable);
+
+    @Query("""
+            select new com.bidtix.booking.dtos.OrderSummaryResponse(o.orderCode, o.source, o.status, o.totalAmount,
+                o.currency, o.createdAt, o.expiresAt, o.paidAt, e.publicId, e.title)
+            from Order o
+            join Event e on e.id = o.eventId
+            join User u on u.id = o.userId
+            where u.publicId = :userPublicId and o.orderCode = :orderCode
+            """)
+    Optional<OrderSummaryResponse> findSummaryOfUser(@Param("userPublicId") UUID userPublicId,
+                                                     @Param("orderCode") String orderCode);
+
+    /** The lines of an order. It does not check whose order it is: call it only for an order the caller may see. */
+    @Query("""
+            select new com.bidtix.booking.dtos.OrderItemResponse(z.publicId, z.name, s.publicId, s.rowLabel, s.seatNumber,
+                i.quantity, i.unitPrice)
+            from OrderItem i
+            join TicketZone z on z.id = i.zoneId
+            left join Seat s on s.id = i.seatId
+            where i.order.orderCode = :orderCode
+            order by i.id
+            """)
+    List<OrderItemResponse> findItemViews(@Param("orderCode") String orderCode);
 }
