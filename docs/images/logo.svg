@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="610" height="240" viewBox="0 0 610 240" role="img" aria-labelledby="t d">
   <title id="t">BidTix</title>
-  <desc id="d">A concert ticket whose bars rise like bids and whose stub carries a check mark, next to the word BidTix.</desc>
+  <desc id="d">A ticket with a seat map, one seat taken, and an auction gavel coming down on it, next to the word BidTix.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0f172a"/>
@@ -19,22 +19,28 @@
   <!-- badge background -->
   <rect x="2" y="2" width="606" height="236" rx="32" fill="url(#bg)" stroke="#334155" stroke-width="2"/>
 
-  <!-- ticket: rounded body with a notch at the top and bottom of the perforation -->
+  <!-- booking: a ticket carrying a seat map, one seat taken -->
   <path fill="url(#ticket)"
-        d="M64 60H178A10 10 0 0 0 198 60H232A16 16 0 0 1 248 76V164A16 16 0 0 1 232 180H198A10 10 0 0 0 178 180H64A16 16 0 0 1 48 164V76A16 16 0 0 1 64 60Z"/>
-  <!-- perforation -->
-  <line x1="188" y1="76" x2="188" y2="164" stroke="#ffffff" stroke-opacity="0.6" stroke-width="2.5" stroke-dasharray="4 6" stroke-linecap="round"/>
-
-  <!-- rising bids; the highest one wins -->
-  <g>
-    <rect x="68"  y="136" width="20" height="24" rx="4" fill="#ffffff" fill-opacity="0.55"/>
-    <rect x="96"  y="120" width="20" height="40" rx="4" fill="#ffffff" fill-opacity="0.7"/>
-    <rect x="124" y="102" width="20" height="58" rx="4" fill="#ffffff" fill-opacity="0.85"/>
-    <rect x="152" y="80"  width="20" height="80" rx="4" fill="url(#gold)"/>
+        d="M56 84H154A10 10 0 0 0 174 84H196A16 16 0 0 1 212 100V172A16 16 0 0 1 196 188H174A10 10 0 0 0 154 188H56A16 16 0 0 1 40 172V100A16 16 0 0 1 56 84Z"/>
+  <line x1="164" y1="100" x2="164" y2="172" stroke="#ffffff" stroke-opacity="0.6" stroke-width="2.5" stroke-dasharray="4 6" stroke-linecap="round"/>
+  <g fill="#ffffff" fill-opacity="0.38">
+    <rect x="58" y="104" width="17" height="17" rx="5"/><rect x="82" y="104" width="17" height="17" rx="5"/><rect x="106" y="104" width="17" height="17" rx="5"/><rect x="130" y="104" width="17" height="17" rx="5"/>
+    <rect x="58" y="128" width="17" height="17" rx="5"/>                                               <rect x="106" y="128" width="17" height="17" rx="5"/><rect x="130" y="128" width="17" height="17" rx="5"/>
+    <rect x="58" y="152" width="17" height="17" rx="5"/><rect x="82" y="152" width="17" height="17" rx="5"/><rect x="106" y="152" width="17" height="17" rx="5"/><rect x="130" y="152" width="17" height="17" rx="5"/>
   </g>
+  <rect x="82" y="128" width="17" height="17" rx="5" fill="#ffffff"/>
 
-  <!-- sold: one seat, one ticket -->
-  <path d="M210 121l9 9 17-19" fill="none" stroke="#ffffff" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- auction: the gavel coming down on the ticket -->
+  <g transform="translate(205 76) rotate(-45)" fill="url(#gold)" stroke="#14163a" stroke-width="5" stroke-linejoin="round" paint-order="stroke">
+    <rect x="-7" y="12" width="14" height="74" rx="7"/>
+    <rect x="-30" y="-17" width="60" height="34" rx="3"/>
+    <rect x="-43" y="-22" width="15" height="44" rx="6"/>
+    <rect x="28" y="-22" width="15" height="44" rx="6"/>
+  </g>
+  <g stroke="#fbbf24" stroke-width="5" stroke-linecap="round">
+    <path d="M144 68L131 61"/>
+    <path d="M155 55L149 41"/>
+  </g>
 
   <!-- wordmark -->
   <text x="284" y="138" font-family="'Inter','Segoe UI','Helvetica Neue',Helvetica,Arial,sans-serif" font-size="82" font-weight="800" letter-spacing="-2" fill="#f8fafc">Bid<tspan fill="url(#gold)">Tix</tspan></text>
