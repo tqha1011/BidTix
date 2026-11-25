@@ -1,6 +1,8 @@
 package com.bidtix.auction.infrastructure;
 
 import com.bidtix.auction.domain.Bid;
+import com.bidtix.auction.dtos.BidHistoryResponse;
+import org.springframework.data.domain.Page;
 import com.bidtix.auction.domain.LeaderboardEntry;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Query;
@@ -40,4 +42,18 @@ public interface BidRepository extends CrudRepository<Bid, Long> {
              order by max(b.amount) desc
             """)
     List<LeaderboardEntry> findTopBids(@Param("auctionPublicId") UUID auctionPublicId, Pageable pageable);
+
+    /**
+     * The accepted bids of one auction, highest (so newest) first, with the bidder's name: one query. A read model that
+     * joins the user module by id, like the other list views.
+     */
+    @Query(value = """
+            select new com.bidtix.auction.dtos.BidHistoryResponse(u.fullName, b.amount, b.createdAt)
+              from Bid b
+              join User u on u.id = b.bidderId
+             where b.auction.publicId = :auctionPublicId
+             order by b.amount desc
+            """,
+            countQuery = "select count(b) from Bid b where b.auction.publicId = :auctionPublicId")
+    Page<BidHistoryResponse> findHistory(@Param("auctionPublicId") UUID auctionPublicId, Pageable pageable);
 }

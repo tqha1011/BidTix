@@ -3,9 +3,11 @@ package com.bidtix.auction.service;
 import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.dtos.AuctionResponse;
+import com.bidtix.auction.dtos.BidHistoryResponse;
 import com.bidtix.auction.dtos.CreateAuctionRequest;
 import com.bidtix.auction.infrastructure.AuctionProperties;
 import com.bidtix.auction.infrastructure.AuctionRepository;
+import com.bidtix.auction.infrastructure.BidRepository;
 import com.bidtix.common.dtos.PageResponse;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
@@ -46,6 +48,7 @@ public class AuctionService {
     private static final String ACTIVE_SEAT_INDEX = "ux_auctions_active_seat";
 
     private final AuctionRepository auctionRepository;
+    private final BidRepository bidRepository;
     private final EventRepository eventRepository;
     private final TicketZoneRepository zoneRepository;
     private final SeatRepository seatRepository;
@@ -149,6 +152,30 @@ public class AuctionService {
 
         return PageResponse.from(auctions.map(a -> AuctionResponse.from(a, eventIds.get(a.getEventId()),
                 zoneIds.get(a.getZoneId()), a.getSeatId() == null ? null : seatIds.get(a.getSeatId()))));
+    }
+
+    /** One auction, as the list shows it. */
+    @Transactional(readOnly = true)
+    public AuctionResponse getAuction(UUID auctionPublicId) {
+        Auction auction = findAuction(auctionPublicId);
+        UUID eventId = eventRepository.findById(auction.getEventId()).orElseThrow().getPublicId();
+        UUID zoneId = zoneRepository.findById(auction.getZoneId()).orElseThrow().getPublicId();
+        UUID seatId = auction.getSeatId() == null ? null
+                : seatRepository.findById(auction.getSeatId()).orElseThrow().getPublicId();
+        return AuctionResponse.from(auction, eventId, zoneId, seatId);
+    }
+
+    /** The accepted bids of one auction, highest first. Bad paging values are corrected, as in the auction list. */
+    @Transactional(readOnly = true)
+    public PageResponse<BidHistoryResponse> listBids(UUID auctionPublicId, int page, int size) {
+        findAuction(auctionPublicId);   // an unknown auction is not an empty history
+        var pageable = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE));
+        return PageResponse.from(bidRepository.findHistory(auctionPublicId, pageable));
+    }
+
+    private Auction findAuction(UUID auctionPublicId) {
+        return auctionRepository.findByPublicId(auctionPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.AUCTION_NOT_FOUND));
     }
 
     /** SEATED zones need a seat of that zone; GENERAL_ADMISSION zones take none. Returns the seat, or null for a standing ticket. */
