@@ -466,7 +466,8 @@ cannot be cancelled made every batch containing it roll back, once a minute, for
 ## Load test through the API
 
 How many requests per second, and how many users at once, the whole application carries: real HTTP requests from k6
-against the application in Docker, with PostgreSQL and Redis.
+against the application in Docker, with PostgreSQL and Redis. The raw record of every run, with the machine, times and
+conditions, is in [load-test-log.md](load-test-log.md).
 
 ```bash
 make load-test                         # everything, about 45 minutes; needs Docker, k6, openssl, jq, curl
@@ -522,8 +523,10 @@ What the failing steps looked like (CPU is the average over the run; 200% = both
 | book, 300 req/s | 283 | 5,623 | 5.8% | 114% | 93% |
 | users, 2,000 | 539 | 3,192 | - | 195% | 103% |
 
-- **Reads and mixed traffic stop at the application's CPU.** At the failing step the application uses its two cores while
-  the database uses about one of its two. The limit lies between 600 and 800 req/s; it was not narrowed further.
+- **600 req/s is the highest rate tried that passed, not the limit.** The application used only about 110% of its 200%
+  there. At 800 req/s it used both cores while the database used about one of its two, but the later runs showed that
+  results depend on warm-up (below), so the limit for reads and mixed traffic was not established here. For a 70/30 mix
+  it was measured later, in [Requests open at once](#requests-open-at-once).
 - **Booking costs far more than reading.** At 400 req/s both the application and the database are busy. The real limit
   for booking is **not established**, because it depends on how warm the JVM is (below). The 300 req/s step of this run
   failed with a median of 12 ms and a p95 of 5.6 s.
@@ -555,6 +558,54 @@ What the failing steps looked like (CPU is the average over the run; 200% = both
 - One run per cell; no medians. A step of 60 s is short for tail latency.
 - The data is small (50 events), and booking uses one zone, which is the worst case for the counter row.
 - Nothing was tuned. Pool size, JVM flags and CPU limits were not varied.
+
+## Requests open at once
+
+How many requests per second at most, and how many requests the application can have open at the same moment.
+
+```bash
+make load-test PROFILE=concurrency     # about 55 minutes; LEVELS, ROUNDS, LEVEL_SECONDS, BOOK_SHARE change the run
+```
+
+70% reads and 30% bookings (one standing ticket, all in one zone). Every client sends its next request as soon as the
+answer arrives, so the number of clients is the number of requests open. Each stack is first warmed up at 50 open
+requests until the rate settles (at most six minutes); each level is then measured for 60 s. Same stack and limits as
+above: application 2 CPU, PostgreSQL 2 CPU, pool 10, Tomcat defaults. **Good** = p95 under 500 ms and under 1% failed;
+**broken** = 1% or more failed (a request times out after 10 s).
+
+Two rounds on 2026-11-26, each on a new stack ([raw results](load-test-log.md), runs 11 and 12):
+
+| requests open | req/s, round 1 / 2 | p95 ms, round 1 / 2 | failed | mark |
+|--:|--:|--:|--:|---|
+| 10 | 588 / 506 | 63 / 65 | 0% | good |
+| 25 | 533 / 525 | 116 / 115 | 0% | good |
+| 50 | 519 / 531 | 295 / 295 | 0% | good |
+| **75** (held 180 s) | 514 / 486 | **479 / 495** | 0% | good |
+| 100 | 505 / 506 | 637 / 621 | 0% | slow |
+| 200 | 508 / 502 | 1,309 / 1,313 | 0% | slow |
+| 400 | 526 / 527 | 1,665 / 1,701 | 0% | slow |
+| 800 | 520 / 534 | 2,493 / 2,477 | 0% | slow |
+| 1,600 | 549 / 507 | 3,904 / 4,202 | 0% | slow |
+| 3,200 | 547 / 497 | 6,986 / 7,779 | 0% | slow |
+| 6,400 | - | 10,000 (timeout) | 99.7 / 99.8% | **broken** |
+
+- **At most about 500-590 requests per second**, usually 500-550. Beyond 25 open requests the rate no longer rises; more
+  open requests only wait longer.
+- **About 75 requests open at once with p95 under 500 ms.** There is no margin at that level (479 and 495 ms).
+- **No failed request up to 3,200 open**, but each then waits 6 s on average.
+- **Broken at 6,400**, where almost every request times out. This follows from Little's law (requests open = rate x time
+  each stays open): 6,400 / 530 per second is about 12 s, past the 10 s timeout. The edge would be near 5,000-5,500 open
+  requests; no level was measured between 3,200 and 6,400.
+- **Where the open requests are** (200 or more open): at most 200 have a Tomcat thread, the rest queue for one. Of those
+  200 only 10 hold a database connection; 185-190 wait for one, about 230 ms.
+- **What limits it:** the application used both its cores at every level, and the pool was all but full (about 9 of 10
+  connections busy on average, each held about 11 ms). PostgreSQL used 130-160% of its 200%. Neither the CPU limit nor the
+  pool size was changed, so which of the two to raise first is not known.
+- Stock stayed right: the tickets taken from the zone equalled the tickets in live orders after both rounds.
+
+**Caveats:** one laptop with k6 on it (k6 used about one of the seven threads left over); one hot zone, the worst case
+for booking; the 70/30 mix is an assumption; a closed model slows its own sending down when answers are slow, so it does
+not show what happens when requests keep arriving at a fixed rate beyond the limit.
 
 ## Sale day: 30 minutes of people buying and bidding
 

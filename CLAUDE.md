@@ -100,11 +100,12 @@ seat-hold or payment flow).
 `make keys`, `make psql`, `make bench`, ...). `make bench` runs the slow anti-overselling benchmark
 ([`docs/benchmarks.md`](docs/benchmarks.md)); tests tagged `benchmark` are skipped by `make test`.
 
-`make load-test [PROFILE=smoke|read|book|mixed|users|all]` (`loadtest/run.sh`) load tests the whole application over HTTP:
+`make load-test [PROFILE=smoke|read|book|mixed|users|concurrency|all]` (`loadtest/run.sh`) load tests the whole application over HTTP:
 it builds the `Dockerfile` image, runs its own compose stack (`loadtest/compose.yaml`, fresh database, fixed CPU limits),
 signs tokens with a throwaway key and drives k6. `make sale-day` (`loadtest/soak.sh`, `realistic.js`) runs 30 minutes of
 simulated buyers and bidders with real logins and self-signed IPN callbacks, then checks the data. Method and results:
-[`docs/benchmarks.md`](docs/benchmarks.md), sections "Load test through the API" and "Sale day". A change to the schema or
+[`docs/benchmarks.md`](docs/benchmarks.md), sections "Load test through the API", "Requests open at once" and "Sale day"; every run is recorded in
+[`docs/load-test-log.md`](docs/load-test-log.md). A change to the schema or
 to a route they call may need the seed files or the k6 scripts in `loadtest/` updated.
 
 The raw commands:
