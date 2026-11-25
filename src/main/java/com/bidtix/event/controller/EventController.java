@@ -8,6 +8,7 @@ import com.bidtix.event.dtos.EventDetailResponse;
 import com.bidtix.event.dtos.EventResponse;
 import com.bidtix.event.dtos.SeatResponse;
 import com.bidtix.event.dtos.UpdateEventRequest;
+import com.bidtix.event.dtos.UpdateZoneRequest;
 import com.bidtix.event.dtos.ZoneResponse;
 import com.bidtix.event.service.EventService;
 import com.bidtix.event.service.ZoneService;
@@ -58,6 +59,23 @@ public class EventController {
                                                    Principal principal) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(zoneService.createZone(CurrentUser.publicId(principal), eventPublicId, request));
+    }
+
+    /** Changes a zone of a draft (name, price, standing capacity). Only the event's organizer. */
+    @PutMapping("/{eventPublicId}/zones/{zonePublicId}")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public ZoneResponse updateZone(@PathVariable UUID eventPublicId, @PathVariable UUID zonePublicId,
+                                   @Valid @RequestBody UpdateZoneRequest request, Principal principal) {
+        return zoneService.updateZone(CurrentUser.publicId(principal), eventPublicId, zonePublicId, request);
+    }
+
+    /** Removes a zone of a draft with its seats: 204; 409 {@code EVENT_NOT_EDITABLE} once it has orders. */
+    @DeleteMapping("/{eventPublicId}/zones/{zonePublicId}")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public ResponseEntity<Void> deleteZone(@PathVariable UUID eventPublicId, @PathVariable UUID zonePublicId,
+                                           Principal principal) {
+        zoneService.deleteZone(CurrentUser.publicId(principal), eventPublicId, zonePublicId);
+        return ResponseEntity.noContent().build();
     }
 
     /** DRAFT -> PUBLISHED. The event must have at least one zone; only its organizer may do this. */

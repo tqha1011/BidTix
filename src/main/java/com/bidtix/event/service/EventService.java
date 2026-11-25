@@ -135,14 +135,9 @@ public class EventService {
     @Transactional
     @CacheEvict(cacheNames = CacheConfig.EVENTS, allEntries = true)
     public EventResponse publish(UUID organizerPublicId, UUID eventPublicId) {
-        User organizer = userRepository.findByPublicId(organizerPublicId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
-        Event event = eventRepository.findByPublicId(eventPublicId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
-
-        if (!event.getOrganizerId().equals(organizer.getId())) {
-            throw new BusinessException(ErrorCode.FORBIDDEN);
-        }
+        // locked: the zone check below must still hold when the status changes
+        Event event = requireOwner(organizerPublicId, eventRepository.findByPublicIdForUpdate(eventPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND)));
         if (event.getStatus() != EventStatus.DRAFT) {
             throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE);
         }

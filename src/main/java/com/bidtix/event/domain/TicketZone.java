@@ -59,4 +59,23 @@ public class TicketZone extends AuditableEntity {
         this.capacity = capacity;
         this.availableQuantity = zoneType == ZoneType.GENERAL_ADMISSION ? capacity : null;
     }
+
+    public void rename(String name, long price) {
+        this.name = name;
+        this.price = price;
+    }
+
+    /** GENERAL_ADMISSION only: the same tickets stay taken, so it cannot shrink below them. */
+    public void resize(int newCapacity) {
+        if (zoneType != ZoneType.GENERAL_ADMISSION || newCapacity < takenQuantity()) {
+            throw new IllegalStateException("The zone cannot be resized to " + newCapacity);
+        }
+        this.availableQuantity = newCapacity - takenQuantity();
+        this.capacity = newCapacity;
+    }
+
+    /** Tickets of a standing zone that are not free: held by orders, sold or being auctioned. */
+    public int takenQuantity() {
+        return availableQuantity == null ? 0 : capacity - availableQuantity;
+    }
 }

@@ -103,6 +103,11 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
     @Query("delete from Seat s where s.zone.id in (select z.id from TicketZone z where z.event.id = :eventId)")
     int deleteByEventId(Long eventId);
 
+    /** Removes the zone's seats; for deleting a zone of a draft. */
+    @Modifying
+    @Query("delete from Seat s where s.zone.id = :zoneId")
+    int deleteByZoneId(Long zoneId);
+
     interface ZoneSeats {
         Long getZoneId();
 
