@@ -25,6 +25,10 @@ Version numbers are global across modules, so a new migration always takes the n
 | V13 | `event` | `venues.public_id` |
 | V14 | `event` | index `idx_events_status_starts_at (status, starts_at)` for the public event list |
 | V15 | `payment` | `payments.txn_ref` (our reference per attempt, `UNIQUE (provider, txn_ref)`), provider `VNPAY`, status `REFUND_PENDING`, `ux_payments_one_succeeded_per_order` |
+| V16 | `payment` | `payments.requested_at` (the `vnp_CreateDate` sent to VNPAY) |
+| V17 | `payment` | `payments.refund_requested_at` (the claim on a refund) |
+| V18 | `payment` | `payments.refund_attempts`, `payments.refund_next_attempt_at` (retrying a refund request) |
+| V19 | `payment` | `payments.refund_queries`, `payments.refund_next_query_at` (asking about a requested refund) |
 
 ## Conventions
 
@@ -82,12 +86,25 @@ users ──< idempotency_keys
 - An order can have several payments (one per attempt after a failed or abandoned one). Each has its own `txn_ref`
   (VNPAY's `vnp_TxnRef`, unique per provider), which the provider's callback uses to name the payment.
   `provider_txn_id` is the provider's own number, set when it confirms.
+- `payments.refund_requested_at` claims a refund: set by one conditional `UPDATE` (`REFUND_PENDING` and still `NULL`,
+  row count checked) and committed before VNPAY is called. It means the request may have been sent, not that the money
+  is back. It goes back to `NULL` only when the request certainly never reached VNPAY; then `refund_next_attempt_at`
+  holds the payment back, and `refund_attempts` (counted at each claim) ends the retries after 5.
+- A requested refund is asked about with querydr: `refund_queries` counts the scheduled queries (10 at most, set to the
+  limit when the refund is rejected) and `refund_next_query_at` spaces them out.
+- `payments.requested_at` is exactly the `vnp_CreateDate` sent to VNPAY (whole seconds). Its query and refund APIs need
+  it as `vnp_TransactionDate`. `NULL` for payments made before V16.
 - `ux_payments_one_succeeded_per_order` (V15): at most one `SUCCEEDED` payment per order. A second confirmed payment for
   the same order is stored as `REFUND_PENDING`, as is one that arrives after the order expired or was cancelled.
-- `payment_webhook_events` is an inbox. The webhook inserts first, and a duplicate delivery violates
-  `UNIQUE (provider, provider_event_id)`, so it is acknowledged with `200` and not processed again.
-- A successful payment for an order that is already `EXPIRED` is refunded, not applied, because the
-  inventory may belong to someone else now.
+- A payment moves `PENDING → SUCCEEDED | FAILED | REFUND_PENDING`, then `REFUND_PENDING → REFUNDED`, set only when
+  VNPAY's querydr reports the full refund as successful. `provider_txn_id` is not stored for a failed transaction.
+- `payment_webhook_events` is an inbox: every callback with a valid signature, one row per
+  `UNIQUE (provider, provider_event_id)` (VNPAY: `vnp_TxnRef:vnp_TransactionStatus`), with the payload.
+  `processed_at` is set in the transaction that records the result; a row without it is still unhandled. A repeat adds
+  no row, and the row does not decide whether a delivery is processed: the payment's status does
+  ([ADR-0005](ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)).
+- A successful payment for an order that is `CANCELLED` (or already paid) is stored as `REFUND_PENDING`, not applied,
+  because the inventory may belong to someone else now.
 
 **auction**
 - One auction sells one ticket: a specific seat, or one GA unit. Its inventory is reserved when the
@@ -120,7 +137,8 @@ users ──< idempotency_keys
 | Hold `SEATED` seats | Optional Redis `SET seat:{id} NX PX <ttl>` fast-reject. Then in the DB: `UPDATE seats SET status='HELD', held_by_order_id=?, hold_expires_at=? WHERE id IN (...) AND status='AVAILABLE'`, with ids in ascending order. If affected rows ≠ requested seats, roll back. |
 | Buy GA | `UPDATE ticket_zones SET available_quantity = available_quantity - :n WHERE id = :id AND available_quantity >= :n`. 0 rows means sold out. |
 | Per-user ticket limit | `pg_advisory_xact_lock(user_id, event_id)` in the order transaction, then count existing tickets + pending items. |
-| Hold expiry | `@Scheduled` sweeper: `... WHERE status='PENDING_PAYMENT' AND expires_at < now() FOR UPDATE SKIP LOCKED`. It expires the order and releases seats/quantity. The race with the payment webhook is settled by `UPDATE orders ... WHERE status='PENDING_PAYMENT'`, so only one of them wins. |
+| Hold expiry | `@Scheduled` sweeper: `... WHERE status='PENDING_PAYMENT' AND expires_at < now() FOR UPDATE SKIP LOCKED`. It cancels the order and releases seats/quantity; an order with a `PENDING` payment only after `bidtix.payment.confirmation-grace` more (the callback may be on its way). The race with the payment webhook is settled by `UPDATE orders ... WHERE status='PENDING_PAYMENT'`, so only one of them wins. |
+| Confirm a payment (provider callback) | Verify the signature, store the callback (`INSERT ... ON CONFLICT DO NOTHING`, own transaction). Then in one transaction: `UPDATE orders ... WHERE status='PENDING_PAYMENT'`, tickets, and `UPDATE payments ... WHERE status='PENDING' AND version=?`. 0 payment rows means another delivery won: roll back. |
 | Place bid | A single conditional update on `auctions` (`status='LIVE' AND now() < ends_at AND :amt >= COALESCE(current_price + min_increment, start_price)`) that also bumps `bid_count`, `version` and extends `ends_at` inside the anti-snipe window. On 1 row, insert into `bids` in the same transaction. |
 | Close auction / offers | Jobs with `FOR UPDATE SKIP LOCKED`. When a `LIVE` auction passes `ends_at` with the reserve met, it moves to `AWAITING_PAYMENT` with a rank-1 offer and an `AUCTION` order. Without bids it `FAILED` and the inventory is released. An expired offer passes to the next rank; when no bidder is left, the auction `FAILED`. |
 | Cache | Redis cache-aside for event list/detail, zone availability (short TTL, read hint only), and auction current price. The DB always validates writes. |

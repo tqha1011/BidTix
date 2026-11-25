@@ -76,4 +76,24 @@ public class Event extends AuditableEntity {
         this.saleEndsAt = saleEndsAt;
         this.maxTicketsPerUser = maxTicketsPerUser;
     }
+
+    /** Changes what buyers only read; allowed after publishing too. */
+    public void describe(String title, String description) {
+        this.title = title;
+        this.description = description;
+    }
+
+    /** Changes where and when, and the buying rules. Only for a draft: nobody has bought anything yet. */
+    public void reschedule(Venue venue, Instant startsAt, Instant endsAt, Instant saleStartsAt, Instant saleEndsAt,
+                           int maxTicketsPerUser) {
+        if (status != EventStatus.DRAFT) {
+            throw new IllegalStateException("Only a draft event can be rescheduled");
+        }
+        this.venue = venue;
+        this.startsAt = startsAt;
+        this.endsAt = endsAt;
+        this.saleStartsAt = saleStartsAt;
+        this.saleEndsAt = saleEndsAt;
+        this.maxTicketsPerUser = maxTicketsPerUser;
+    }
 }

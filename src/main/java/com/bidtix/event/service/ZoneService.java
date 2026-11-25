@@ -8,9 +8,11 @@ import com.bidtix.event.domain.TicketZone;
 import com.bidtix.event.domain.ZoneType;
 import com.bidtix.event.dtos.CreateZoneRequest;
 import com.bidtix.event.dtos.CreateZoneRequest.SeatRowRequest;
+import com.bidtix.event.dtos.UpdateZoneRequest;
 import com.bidtix.event.dtos.ZoneResponse;
 import com.bidtix.event.infrastructure.EventRepository;
 import com.bidtix.event.infrastructure.SeatBulkInserter;
+import com.bidtix.event.infrastructure.SeatRepository;
 import com.bidtix.event.infrastructure.TicketZoneRepository;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.infrastructure.UserRepository;
@@ -39,6 +41,7 @@ public class ZoneService {
     private final EventRepository eventRepository;
     private final TicketZoneRepository ticketZoneRepository;
     private final SeatBulkInserter seatBulkInserter;
+    private final SeatRepository seatRepository;
     // Known exception to the module rules (same as auth): the user module has no service yet.
     private final UserRepository userRepository;
 
@@ -47,17 +50,7 @@ public class ZoneService {
         List<SeatRowRequest> rows = request.rows() == null ? List.of() : request.rows();
         int capacity = resolveCapacity(request, rows);
 
-        User organizer = userRepository.findByPublicId(organizerPublicId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
-        Event event = eventRepository.findByPublicId(eventPublicId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
-
-        if (!event.getOrganizerId().equals(organizer.getId())) {
-            throw new BusinessException(ErrorCode.FORBIDDEN);
-        }
-        if (event.getStatus() != EventStatus.DRAFT) {
-            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE);
-        }
+        Event event = lockOwnDraft(organizerPublicId, eventPublicId);
 
         TicketZone zone;
         try {
@@ -74,6 +67,74 @@ public class ZoneService {
                 ? seatBulkInserter.insert(zone.getId(), rows)
                 : 0;
         return ZoneResponse.from(zone, seatCount);
+    }
+
+    /**
+     * Changes a zone of a draft: name, price and, for a standing zone, capacity (never below the tickets already taken).
+     * The seats of a seated zone stay as they are.
+     */
+    @Transactional
+    public ZoneResponse updateZone(UUID organizerPublicId, UUID eventPublicId, UUID zonePublicId,
+                                   UpdateZoneRequest request) {
+        Event event = lockOwnDraft(organizerPublicId, eventPublicId);
+        TicketZone zone = zoneOf(event, zonePublicId);
+        Integer capacity = request.capacity();
+        if (capacity != null && capacity != zone.getCapacity()) {
+            if (zone.getZoneType() == ZoneType.SEATED) {
+                throw invalid("The capacity of a SEATED zone is its seats: remove the zone and create it again");
+            }
+            if (capacity < zone.takenQuantity()) {
+                throw invalid(zone.takenQuantity() + " tickets of this zone are taken: capacity cannot be lower");
+            }
+            zone.resize(capacity);
+        }
+        zone.rename(request.name().trim(), request.price());
+        try {
+            ticketZoneRepository.saveAndFlush(zone);
+        } catch (DataIntegrityViolationException e) {
+            log.info("Zone name already used for event {}: {}", eventPublicId, e.getMostSpecificCause().getMessage());
+            throw new BusinessException(ErrorCode.ZONE_NAME_TAKEN);
+        }
+        return ZoneResponse.from(zone, zone.getZoneType() == ZoneType.SEATED ? zone.getCapacity() : 0);
+    }
+
+    /** Removes a zone of a draft with its seats. A zone that already has an order stays whole: the foreign keys decide. */
+    @Transactional
+    public void deleteZone(UUID organizerPublicId, UUID eventPublicId, UUID zonePublicId) {
+        Event event = lockOwnDraft(organizerPublicId, eventPublicId);
+        TicketZone zone = zoneOf(event, zonePublicId);
+        try {
+            seatRepository.deleteByZoneId(zone.getId());
+            ticketZoneRepository.delete(zone);
+            ticketZoneRepository.flush();
+        } catch (DataIntegrityViolationException e) {
+            log.info("Zone {} is referenced and cannot be deleted: {}", zonePublicId, e.getMostSpecificCause().getMessage());
+            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE, "The zone already has orders and cannot be deleted");
+        }
+    }
+
+    /**
+     * The caller's DRAFT event with its row locked, so it cannot be published or deleted until this transaction ends.
+     */
+    private Event lockOwnDraft(UUID organizerPublicId, UUID eventPublicId) {
+        User organizer = userRepository.findByPublicId(organizerPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
+        Event event = eventRepository.findByPublicIdForUpdate(eventPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
+        if (!event.getOrganizerId().equals(organizer.getId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+        if (event.getStatus() != EventStatus.DRAFT) {
+            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE);
+        }
+        return event;
+    }
+
+    /** A zone of another event is "not found" for this one. */
+    private TicketZone zoneOf(Event event, UUID zonePublicId) {
+        return ticketZoneRepository.findByPublicId(zonePublicId)
+                .filter(zone -> zone.getEvent().getId().equals(event.getId()))
+                .orElseThrow(() -> new BusinessException(ErrorCode.ZONE_NOTFOUND));
     }
 
     /**

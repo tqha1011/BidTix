@@ -2,6 +2,7 @@ package com.bidtix.auction.controller;
 
 import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.dtos.AuctionResponse;
+import com.bidtix.auction.dtos.BidHistoryResponse;
 import com.bidtix.auction.dtos.CreateAuctionRequest;
 import com.bidtix.auction.service.AuctionService;
 import com.bidtix.common.dtos.PageResponse;
@@ -12,6 +13,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -36,6 +38,30 @@ public class AuctionController {
                                                          Principal principal) {
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(auctionService.createAuction(CurrentUser.publicId(principal), request));
+    }
+
+    /**
+     * Calls off an auction nobody has bid on (SCHEDULED, or LIVE without bids) and puts its ticket back on sale. 409
+     * {@code AUCTION_NOT_CANCELLABLE} otherwise. Only the event's organizer.
+     */
+    @PostMapping("/{auctionPublicId}/cancel")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public AuctionResponse cancel(@PathVariable UUID auctionPublicId, Principal principal) {
+        return auctionService.cancelAuction(CurrentUser.publicId(principal), auctionPublicId);
+    }
+
+    /** One auction; 404 {@code AUCTION_NOT_FOUND}. */
+    @GetMapping("/{auctionPublicId}")
+    public AuctionResponse get(@PathVariable UUID auctionPublicId) {
+        return auctionService.getAuction(auctionPublicId);
+    }
+
+    /** The accepted bids of one auction, highest first, with the bidders' names. */
+    @GetMapping("/{auctionPublicId}/bids")
+    public PageResponse<BidHistoryResponse> bids(@PathVariable UUID auctionPublicId,
+                                                 @RequestParam(defaultValue = "0") int page,
+                                                 @RequestParam(defaultValue = "20") int size) {
+        return auctionService.listBids(auctionPublicId, page, size);
     }
 
     /**

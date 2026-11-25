@@ -4,6 +4,7 @@ import com.bidtix.event.domain.TicketZone;
 import com.bidtix.event.infrastructure.SeatRepository;
 import com.bidtix.event.infrastructure.SeatRepository.HeldSeat;
 import com.bidtix.event.infrastructure.TicketZoneRepository;
+import com.bidtix.payment.service.ConfirmationGrace;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -15,12 +16,15 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
 /**
  * Cancels booking orders that were not paid in time and gives their stock back (seats HELD -> AVAILABLE, standing
- * quantity added back to the zone counter). Auction orders are not touched: the auction owns its stock.
+ * quantity added back to the zone counter). Auction orders are not touched: the auction owns its stock. An order with a
+ * payment still waiting for the provider's callback is kept for a grace period after its deadline (see
+ * {@link ConfirmationGrace}).
  * <p>
  * The job reads a batch of up to {@value #BATCH_SIZE} expired order ids and handles the whole batch in one
  * transaction: lock the orders ({@code FOR UPDATE SKIP LOCKED}, lowest id first), cancel them with one conditional
@@ -46,6 +50,7 @@ public class OrderCancellationJob {
     private final TicketZoneRepository zoneRepository;
     private final BookingGateway bookingGateway;
     private final TransactionTemplate transactionTemplate;
+    private final ConfirmationGrace confirmationGrace;
     private final Clock clock;
 
     /** What a transaction gave back: how many orders, and which gate flags are now out of date. */
@@ -103,9 +108,13 @@ public class OrderCancellationJob {
     /** One transaction. Orders that are not ours to cancel (locked elsewhere, paid, already cancelled) are left out. */
     private Released cancel(List<Long> orderIds) {
         Instant now = clock.instant();
+        // an order with a payment still unconfirmed is only taken once its grace period is over too
+        Set<Long> awaiting = confirmationGrace.ordersAwaitingConfirmation(orderIds);
+        Instant graceOver = confirmationGrace.cutoff(now);
         // the ids come lowest first, so every job locks rows in the same order
         List<Long> ids = orderIds.stream()
-                .filter(id -> orderRepository.lockExpiredPendingOrder(id, now).isPresent())
+                .filter(id -> orderRepository.lockExpiredPendingOrder(id, awaiting.contains(id) ? graceOver : now)
+                        .isPresent())
                 .toList();
         if (ids.isEmpty()) {
             return Released.NONE;

@@ -223,6 +223,10 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
                 userIds.add(user.getPublicId());
             }
             em.flush();
+            // only a published event sells tickets
+            em.createQuery("update Event e set e.status = com.bidtix.event.domain.EventStatus.PUBLISHED where e.id in :ids")
+                    .setParameter("ids", List.of(event.getId()))
+                    .executeUpdate();
             return new Fixture(event.getPublicId(), zone.getPublicId(), zone.getId(), seatIds, userIds);
         });
     }

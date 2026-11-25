@@ -26,7 +26,7 @@ class VnpaySignerTest {
     private static VnpayProperties properties(String tmnCode, String secret) {
         return new VnpayProperties(tmnCode, secret, "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html",
                 "http://localhost:8080/api/v1/payments/vnpay/return", "http://localhost:8080/api/v1/payments/vnpay/ipn",
-                "2.1.0","pay" ,15);
+                "https://sandbox.vnpayment.vn/merchant_webapi/api/transaction", "2.1.0", "pay", "refund", "querydr", 15);
     }
 
     private static Map<String, String> params() {
@@ -122,9 +122,162 @@ class VnpaySignerTest {
                 .isInstanceOf(IllegalStateException.class);
     }
 
+    // ---- refund: another format, the values only, joined with | in a fixed order -----------------------
+
+    private static final String REFUND_REQUEST_HASH =
+            "2fc1c37342204764c5a34f8b6eaf4ea4c32ca05c4dcc5e0d497740e5c189f085df7823707b4c0856c8ffb88f1ecbefcb160f17031c4120570820aca0e177649d";
+    private static final String REFUND_REQUEST_HASH_WITHOUT_TRANSACTION_NO =
+            "20f6904c8ee18e0a4781445038ec1c3ee271063f73ea93f682409d770969073203a4f396db17004f2c168b15c9dd6f025291fa860fd4960caacb006edf63e22c";
+    private static final String REFUND_RESPONSE_HASH =
+            "27a99417e9aa9b23b5c3dcfaa3e990cd644fecb1d9116cdc10356d6de55df5d443979f599de5a93e95f4c26457e444853444d337aab2e0855f05fa7c52a6b287";
+
+    private static Map<String, String> refundRequest() {
+        Map<String, String> p = new HashMap<>();
+        p.put("vnp_RequestId", "req0001");
+        p.put("vnp_Version", "2.1.0");
+        p.put("vnp_Command", "refund");
+        p.put("vnp_TmnCode", "TESTCODE");
+        p.put("vnp_TransactionType", "02");
+        p.put("vnp_TxnRef", "ORD123-1");
+        p.put("vnp_Amount", "1000000");
+        p.put("vnp_TransactionNo", "14123456");
+        p.put("vnp_TransactionDate", "20260101103111");
+        p.put("vnp_CreateBy", "system");
+        p.put("vnp_CreateDate", "20260101110000");
+        p.put("vnp_IpAddr", "127.0.0.1");
+        p.put("vnp_OrderInfo", "Hoan tien don hang ORD123");
+        return p;
+    }
+
+    private static Map<String, String> refundResponse() {
+        Map<String, String> p = new HashMap<>();
+        p.put("vnp_ResponseId", "res0001");
+        p.put("vnp_Command", "refund");
+        p.put("vnp_ResponseCode", "00");
+        p.put("vnp_Message", "Refund success");
+        p.put("vnp_TmnCode", "TESTCODE");
+        p.put("vnp_TxnRef", "ORD123-1");
+        p.put("vnp_Amount", "1000000");
+        p.put("vnp_BankCode", "NCB");
+        p.put("vnp_PayDate", "20260101110005");
+        p.put("vnp_TransactionNo", "14123999");
+        p.put("vnp_TransactionType", "02");
+        p.put("vnp_TransactionStatus", "05");
+        p.put("vnp_OrderInfo", "Hoan tien don hang ORD123");
+        p.put("vnp_SecureHash", REFUND_RESPONSE_HASH);
+        return p;
+    }
+
+    @Test
+    void aRefundRequestIsHashedOverItsValuesInVnpaysOrder() {
+        Map<String, String> p = refundRequest();
+        p.put("vnp_SecureHash", "ignored");   // not one of the signed fields
+
+        assertThat(signer.refundRequestHash(p)).isEqualTo(REFUND_REQUEST_HASH);
+    }
+
+    @Test
+    void aMissingRefundValueKeepsItsPlaceAsAnEmptyOne() {
+        Map<String, String> p = refundRequest();
+        p.remove("vnp_TransactionNo");
+
+        assertThat(signer.refundRequestHash(p)).isEqualTo(REFUND_REQUEST_HASH_WITHOUT_TRANSACTION_NO);
+    }
+
+    @Test
+    void aRefundResponseSignedWithTheSecretIsAccepted_inAnyHexCase() {
+        Map<String, String> p = refundResponse();
+        assertThat(signer.verifyRefundResponse(p)).isTrue();
+
+        p.put("vnp_SecureHash", REFUND_RESPONSE_HASH.toUpperCase());
+        assertThat(signer.verifyRefundResponse(p)).isTrue();
+    }
+
+    @Test
+    void aChangedRefundResponseOrOneWithoutAHashIsRejected() {
+        Map<String, String> changed = refundResponse();
+        changed.put("vnp_TransactionStatus", "00");
+        assertThat(signer.verifyRefundResponse(changed)).isFalse();
+
+        Map<String, String> unsigned = refundResponse();
+        unsigned.remove("vnp_SecureHash");
+        assertThat(signer.verifyRefundResponse(unsigned)).isFalse();
+    }
+
     private static Map<String, String> withHash() {
         Map<String, String> p = params();
         p.put("vnp_SecureHash", EXPECTED_HASH);
         return p;
+    }
+
+    // ---- querydr: like the refund API, with its own fields and order ----------------------------------
+
+    private static final String QUERY_REQUEST_HASH =
+            "4323053a8e814bb9a749b82abb1986674fc1e338bdc2a22c888297285068f9483fa6e040e62cb1f864a048cd513a808299b95d69bc1d8e135068aecbc1b32346";
+    private static final String QUERY_RESPONSE_HASH =
+            "f27ac771c44774a892cb769a8737bcc8714dee4a3676b29376ee850bd106b5b20b77375e30836aaf7ee67f2fe24e9d18f0e06f9efdf4bbace50797dd1e99b909";
+    private static final String QUERY_RESPONSE_HASH_WITHOUT_PROMOTION =
+            "c65715f8cce3be75c7c6ebed039a01b353a02f697b97ee8b98c412c63b1a2b553b4530b52545fd5acbe5e4168a0997bbfaef93b38e82f3e3c7206a05cf42be7c";
+
+    private static Map<String, String> queryResponse() {
+        Map<String, String> p = params();
+        p.clear();
+        p.put("vnp_ResponseId", "res0001");
+        p.put("vnp_Command", "querydr");
+        p.put("vnp_ResponseCode", "00");
+        p.put("vnp_Message", "QueryDR success");
+        p.put("vnp_TmnCode", "TESTCODE");
+        p.put("vnp_TxnRef", "ORD123-1");
+        p.put("vnp_Amount", "1000000");
+        p.put("vnp_BankCode", "NCB");
+        p.put("vnp_PayDate", "20260101103500");
+        p.put("vnp_TransactionNo", "14123456");
+        p.put("vnp_TransactionType", "01");
+        p.put("vnp_TransactionStatus", "00");
+        p.put("vnp_OrderInfo", "Thanh toan don hang ORD123");
+        p.put("vnp_PromotionCode", "PROMO1");
+        p.put("vnp_PromotionAmount", "5000");
+        p.put("vnp_SecureHash", QUERY_RESPONSE_HASH);
+        return p;
+    }
+
+    @Test
+    void aQueryRequestIsHashedOverItsOwnValuesInVnpaysOrder() {
+        Map<String, String> p = new HashMap<>();
+        p.put("vnp_RequestId", "req0001");
+        p.put("vnp_Version", "2.1.0");
+        p.put("vnp_Command", "querydr");
+        p.put("vnp_TmnCode", "TESTCODE");
+        p.put("vnp_TxnRef", "ORD123-1");
+        p.put("vnp_TransactionDate", "20260101103111");
+        p.put("vnp_CreateDate", "20260101110000");
+        p.put("vnp_IpAddr", "127.0.0.1");
+        p.put("vnp_OrderInfo", "Truy van giao dich ORD123");
+        p.put("vnp_Amount", "1000000");   // not a field of this request
+
+        assertThat(signer.queryRequestHash(p)).isEqualTo(QUERY_REQUEST_HASH);
+    }
+
+    @Test
+    void aQueryResponseSignedWithTheSecretIsAccepted_withOrWithoutAPromotion() {
+        Map<String, String> p = queryResponse();
+        assertThat(signer.verifyQueryResponse(p)).isTrue();
+
+        p.remove("vnp_PromotionCode");
+        p.remove("vnp_PromotionAmount");
+        p.put("vnp_SecureHash", QUERY_RESPONSE_HASH_WITHOUT_PROMOTION);
+        assertThat(signer.verifyQueryResponse(p)).isTrue();
+    }
+
+    @Test
+    void aChangedQueryResponseOrOneWithoutAHashIsRejected() {
+        Map<String, String> changed = queryResponse();
+        changed.put("vnp_PromotionAmount", "6000");
+        assertThat(signer.verifyQueryResponse(changed)).isFalse();
+        assertThat(signer.verifyRefundResponse(queryResponse())).as("the refund rule does not fit it").isFalse();
+
+        Map<String, String> unsigned = queryResponse();
+        unsigned.remove("vnp_SecureHash");
+        assertThat(signer.verifyQueryResponse(unsigned)).isFalse();
     }
 }

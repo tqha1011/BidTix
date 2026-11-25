@@ -52,14 +52,24 @@ bidtix:
   # VNPAY (see payment/infrastructure). The merchant code and the secret come from the merchant account: set them with
   # environment variables and never commit them. pay-url is the sandbox; the production URL is the only change to go live.
   payment:
+    # An order with a payment still waiting for the provider's callback is kept this long after its deadline before its
+    # stock is released (booking) or the offer passes on (auction). Customers get no extra time to pay. 0 turns it off.
+    confirmation-grace: 10m
+    # When the refund job asks VNPAY to refund the REFUND_PENDING payments and to confirm requested refunds (Spring cron:
+    # second minute hour day month weekday; this is every minute). "-" turns both off. Note: the VNPAY sandbox has not
+    # answered the refund API yet, and a payment sent to it stays claimed.
+    refund-cron: "0 * * * * *"
     vnpay:
       tmn-code: ${VNP_TMNCODE:}
       hash-secret: ${VNP_HASH_SECRET:}
       pay-url: ${VNP_URL:https://sandbox.vnpayment.vn/paymentv2/vpcpay.html}
       return-url: ${VNP_RETURN_URL:http://localhost:8080/api/v1/payments/vnpay/return}
       ipn-url: ${VNP_IPN_URL:http://localhost:8080/api/v1/payments/vnpay/ipn}
+      refund-url: ${VNP_REFUND_URL:https://sandbox.vnpayment.vn/merchant_webapi/api/transaction}
       version: 2.1.0
-      command: pay
+      command-pay: pay
+      command-refund: refund
+      command-query: querydr
 
   # Idempotency-Key (see common/idempotency): a retried POST with the same key and body runs once and then replays the
   # stored response. `paths` are the POST routes that REQUIRE the header. Keys are kept for `ttl`; a key left
@@ -87,3 +97,8 @@ bidtix:
       auth-register: { limit: 3, window: 1m, fail-open: false }       # per IP
       # per logged-in user, every other API: a burst of 15, then 3 more requests every 10 s (18 a minute)
       default-user:  { algorithm: token-bucket, capacity: 15, refill-tokens: 3, refill-every: 10s, fail-open: true }
+      # VNPAY's IPN, per IP: all of VNPAY's calls come from a few addresses, so the limit is wide. Fail-open, because the
+      # signature is what protects the route and a payment must still be confirmed while Redis is down.
+      vnpay-ipn:     { algorithm: token-bucket, capacity: 100, refill-tokens: 20, refill-every: 1s, fail-open: true }
+      # the page a customer's browser comes back to, per IP: it only reads
+      vnpay-return:  { algorithm: token-bucket, capacity: 20, refill-tokens: 5, refill-every: 1s, fail-open: true }

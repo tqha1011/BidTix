@@ -17,6 +17,7 @@ import com.bidtix.payment.service.PaymentService;
 import com.bidtix.booking.dtos.BookingTicketQuantityResult;
 import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.service.BookingService;
+import com.bidtix.booking.service.MyOrderService;
 import com.bidtix.booking.domain.OrderStatus;
 import com.bidtix.event.domain.ZoneType;
 import com.bidtix.booking.service.AdminTicketService;
@@ -502,5 +503,6 @@ class MethodAuthorizationTest {
         @Bean LeaderboardService leaderboardService() { return mock(LeaderboardService.class); }
         @Bean BookingService bookingService() { return mock(BookingService.class); }
         @Bean PaymentService paymentService() { return mock(PaymentService.class); }
+        @Bean MyOrderService myOrderService() { return mock(MyOrderService.class); }
     }
 }

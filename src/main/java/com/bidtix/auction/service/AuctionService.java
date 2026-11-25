@@ -3,9 +3,11 @@ package com.bidtix.auction.service;
 import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.dtos.AuctionResponse;
+import com.bidtix.auction.dtos.BidHistoryResponse;
 import com.bidtix.auction.dtos.CreateAuctionRequest;
 import com.bidtix.auction.infrastructure.AuctionProperties;
 import com.bidtix.auction.infrastructure.AuctionRepository;
+import com.bidtix.auction.infrastructure.BidRepository;
 import com.bidtix.common.dtos.PageResponse;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
@@ -27,6 +29,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.util.HashMap;
@@ -46,6 +49,9 @@ public class AuctionService {
     private static final String ACTIVE_SEAT_INDEX = "ux_auctions_active_seat";
 
     private final AuctionRepository auctionRepository;
+    private final BidRepository bidRepository;
+    private final AuctionSettlementService settlement;
+    private final TransactionTemplate transactionTemplate;
     private final EventRepository eventRepository;
     private final TicketZoneRepository zoneRepository;
     private final SeatRepository seatRepository;
@@ -149,6 +155,56 @@ public class AuctionService {
 
         return PageResponse.from(auctions.map(a -> AuctionResponse.from(a, eventIds.get(a.getEventId()),
                 zoneIds.get(a.getZoneId()), a.getSeatId() == null ? null : seatIds.get(a.getSeatId()))));
+    }
+
+    /**
+     * The organizer calls an auction off while nobody has bid: CANCELLED, and its ticket back on sale in the same
+     * transaction. An auction with a bid, or past its bidding, is {@code AUCTION_NOT_CANCELLABLE}: bidders were promised
+     * a result. The booking gate flags are cleared after the commit.
+     */
+    public AuctionResponse cancelAuction(UUID organizerPublicId, UUID auctionPublicId) {
+        record Cancelled(AuctionResponse auction, AuctionSettlementService.Returned returned) {
+        }
+        Cancelled cancelled = transactionTemplate.execute(status -> {
+            Auction auction = findAuction(auctionPublicId);
+            User organizer = userRepository.findByPublicId(organizerPublicId)
+                    .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
+            Event event = eventRepository.findById(auction.getEventId()).orElseThrow();
+            if (!event.getOrganizerId().equals(organizer.getId())) {
+                throw new BusinessException(ErrorCode.FORBIDDEN);
+            }
+            if (auctionRepository.cancelWithoutBids(auction.getId(), clock.instant()) != 1) {
+                throw new BusinessException(ErrorCode.AUCTION_NOT_CANCELLABLE);
+            }
+            AuctionSettlementService.Returned returned = settlement.returnTicket(auction);
+            return new Cancelled(getAuction(auctionPublicId), returned);
+        });
+        settlement.clearGate(cancelled.returned());
+        return cancelled.auction();
+    }
+
+    /** One auction, as the list shows it. */
+    @Transactional(readOnly = true)
+    public AuctionResponse getAuction(UUID auctionPublicId) {
+        Auction auction = findAuction(auctionPublicId);
+        UUID eventId = eventRepository.findById(auction.getEventId()).orElseThrow().getPublicId();
+        UUID zoneId = zoneRepository.findById(auction.getZoneId()).orElseThrow().getPublicId();
+        UUID seatId = auction.getSeatId() == null ? null
+                : seatRepository.findById(auction.getSeatId()).orElseThrow().getPublicId();
+        return AuctionResponse.from(auction, eventId, zoneId, seatId);
+    }
+
+    /** The accepted bids of one auction, highest first. Bad paging values are corrected, as in the auction list. */
+    @Transactional(readOnly = true)
+    public PageResponse<BidHistoryResponse> listBids(UUID auctionPublicId, int page, int size) {
+        findAuction(auctionPublicId);   // an unknown auction is not an empty history
+        var pageable = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE));
+        return PageResponse.from(bidRepository.findHistory(auctionPublicId, pageable));
+    }
+
+    private Auction findAuction(UUID auctionPublicId) {
+        return auctionRepository.findByPublicId(auctionPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.AUCTION_NOT_FOUND));
     }
 
     /** SEATED zones need a seat of that zone; GENERAL_ADMISSION zones take none. Returns the seat, or null for a standing ticket. */

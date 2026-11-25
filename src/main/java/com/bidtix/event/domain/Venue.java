@@ -33,4 +33,10 @@ public class Venue extends AuditableEntity {
         this.address = address;
         this.city = city;
     }
+
+    public void relocate(String name, String address, String city) {
+        this.name = name;
+        this.address = address;
+        this.city = city;
+    }
 }

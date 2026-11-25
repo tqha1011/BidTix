@@ -90,6 +90,30 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
             "where s.id = :seatId and s.status = SeatStatus.RESERVED_FOR_AUCTION")
     int updateAuctionSeatSold(@Param("seatId") Long seatId, @Param("now") Instant now);
 
+    /** How many seats are free in each zone of the event; a zone with none has no row. One query for the whole event. */
+    @Query("select s.zone.id as zoneId, count(s) as available from Seat s " +
+            "where s.zone.event.id = :eventId and s.status = 'AVAILABLE' group by s.zone.id")
+    List<ZoneSeats> countAvailableByEventId(Long eventId);
+
+    /** All seats of a zone, as a seat map shows them: by row, then seat number. */
+    List<Seat> findByZoneIdOrderByRowLabelAscSeatNumberAsc(Long zoneId);
+
+    /** Removes every seat of the event's zones; for deleting a draft. */
+    @Modifying
+    @Query("delete from Seat s where s.zone.id in (select z.id from TicketZone z where z.event.id = :eventId)")
+    int deleteByEventId(Long eventId);
+
+    /** Removes the zone's seats; for deleting a zone of a draft. */
+    @Modifying
+    @Query("delete from Seat s where s.zone.id = :zoneId")
+    int deleteByZoneId(Long zoneId);
+
+    interface ZoneSeats {
+        Long getZoneId();
+
+        long getAvailable();
+    }
+
     interface HeldSeat {
         UUID getSeatPublicId();
 

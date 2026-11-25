@@ -74,6 +74,17 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
     Optional<Auction> findByPublicId(UUID publicId);
 
     /**
+     * -&gt; CANCELLED, only while nobody has bid: SCHEDULED, or LIVE with no bid. One statement, so a bid and a cancel
+     * cannot both win ({@link #placeBid} needs LIVE, this needs a bid count of 0, and the second one re-checks the row).
+     * The caller MUST check the row count and give the ticket back in the same transaction.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("update Auction a set a.status = AuctionStatus.CANCELLED, a.version = a.version + 1, a.updatedAt = :now "
+            + "where a.id = :auctionId and (a.status = AuctionStatus.SCHEDULED "
+            + "or (a.status = AuctionStatus.LIVE and a.bidCount = 0))")
+    int cancelWithoutBids(@Param("auctionId") Long auctionId, @Param("now") Instant now);
+
+    /**
      * Takes a bid in ONE statement: the auction must be LIVE and not over, and {@code amount} must reach the start price
      * (first bid) or the current price plus the minimum increment. The price, the leader and the bid count change together,
      * and the end time moves forward by {@code extension_sec} when the bid lands inside the anti-sniping window (the last

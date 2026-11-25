@@ -45,12 +45,15 @@ public enum ErrorCode {
 
     // --- event ---
     VENUE_NOTFOUND(HttpStatus.NOT_FOUND, "Venue not found"),
+    VENUE_IN_USE(HttpStatus.CONFLICT, "The venue is used by an event"),
     ZONE_NAME_TAKEN(HttpStatus.CONFLICT, "A zone with this name already exists for the event"),
     EVENT_NOT_EDITABLE(HttpStatus.CONFLICT, "Only a DRAFT event can be changed"),
     EVENT_HAS_NO_ZONES(HttpStatus.CONFLICT, "An event needs at least one zone before it can be published"),
+    EVENT_NOT_ON_SALE(HttpStatus.CONFLICT, "The event is not on sale at this time"),
 
     // --- auction ---
     AUCTION_NOT_FOUND(HttpStatus.NOT_FOUND, "Auction not found"),
+    AUCTION_NOT_CANCELLABLE(HttpStatus.CONFLICT, "Only an auction nobody has bid on can be cancelled"),
     EVENT_NOT_PUBLISHED(HttpStatus.CONFLICT, "Only a PUBLISHED event can have auctions"),
     INVALID_MONEY_BID(HttpStatus.BAD_REQUEST, "Bid amount is too low"),
     BID_NO_LONGER_AVAILABLE(HttpStatus.BAD_REQUEST, "The bid is no longer available");

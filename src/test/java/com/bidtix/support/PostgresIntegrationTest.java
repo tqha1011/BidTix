@@ -42,5 +42,7 @@ public abstract class PostgresIntegrationTest {
         registry.add("spring.data.redis.host", REDIS::getHost);
         registry.add("spring.data.redis.port", () -> REDIS.getMappedPort(6379));
         registry.add("spring.data.redis.password", () -> REDIS_PASSWORD);
+        // the refund job calls VNPAY and claims every waiting payment in the shared database: tests call it themselves
+        registry.add("bidtix.payment.refund-cron", () -> "-");
     }
 }

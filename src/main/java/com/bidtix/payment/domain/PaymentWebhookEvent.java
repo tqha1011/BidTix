@@ -15,8 +15,10 @@ import org.hibernate.type.SqlTypes;
 import java.time.Instant;
 
 /**
- * Inbox for provider webhooks. A duplicate delivery violates
- * {@code UNIQUE (provider, provider_event_id)} and is acknowledged without reprocessing.
+ * Inbox for provider webhooks: every callback with a valid signature, one row per
+ * {@code UNIQUE (provider, provider_event_id)}, with the payload as received. {@code processedAt} is set when its result
+ * was recorded; a row without it is a callback that is still unhandled (an error, an unknown payment, a wrong amount).
+ * The row does not decide whether a delivery is processed, the payment's status does (see ADR-0005).
  */
 @Getter
 @Entity

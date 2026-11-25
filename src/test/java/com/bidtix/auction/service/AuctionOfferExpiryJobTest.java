@@ -8,6 +8,8 @@ import com.bidtix.booking.infrastructure.BookingGateway;
 import com.bidtix.event.service.EventService;
 import com.bidtix.event.service.VenueService;
 import com.bidtix.event.service.ZoneService;
+import com.bidtix.payment.service.PayableOrders;
+import com.bidtix.payment.service.PayableOrders.Applied;
 import com.bidtix.support.PostgresIntegrationTest;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.domain.UserRole;
@@ -48,6 +50,7 @@ class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
     @Autowired EventService events;
     @Autowired ZoneService zones;
     @Autowired JdbcTemplate jdbc;
+    @Autowired PayableOrders payableOrders;
 
     private final Instant now = Instant.now();
 
@@ -203,6 +206,41 @@ class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
         assertThat(available(f)).as("the ticket is sold, not back on the counter").isEqualTo(9);
     }
 
+    // ---- a payment that may still be confirmed (bidtix.payment.confirmation-grace: 10m) ------------
+
+    @Test
+    void anExpiredOfferWithAPendingPayment_isKept_soAPaymentMadeInTimeStillWins() {
+        Fixture f = fixture(10);
+        UUID auction = awaitingPayment(standing(f, null), new Bidding(bidder(), 500_000), new Bidding(bidder(), 450_000));
+        long order = ((Number) offer(auction, 1).get("order_id")).longValue();
+        pendingPayment(order);
+        expire(auction, 1);   // a minute ago
+
+        job.expireOffers();
+
+        assertThat(offer(auction, 1).get("status")).isEqualTo("PENDING");
+        assertThat(offerCount(auction)).as("nobody else gets an offer yet").isEqualTo(1);
+
+        // the late callback: the customer paid before the deadline
+        assertThat(payableOrders.applyPayment(order, now.minus(2, ChronoUnit.MINUTES))).isEqualTo(Applied.APPLIED);
+        assertThat(offer(auction, 1).get("status")).isEqualTo("ACCEPTED");
+        assertThat(statusOf(auction)).isEqualTo("SETTLED");
+    }
+
+    @Test
+    void anOfferWithAPendingPayment_passesOnOnceTheGracePeriodIsOver() {
+        Fixture f = fixture(10);
+        UUID auction = awaitingPayment(standing(f, null), new Bidding(bidder(), 500_000), new Bidding(bidder(), 450_000));
+        pendingPayment(((Number) offer(auction, 1).get("order_id")).longValue());
+        jdbc.update("update auction_offers set expires_at = now() - interval '11 minutes' where offer_rank = 1 "
+                + "and auction_id = (select id from auctions where public_id = ?)", auction);
+
+        job.expireOffers();
+
+        assertThat(offer(auction, 1).get("status")).isEqualTo("EXPIRED");
+        assertThat(offer(auction, 2).get("status")).isEqualTo("PENDING");
+    }
+
     // ---- when it is not time, or not ours --------------------------------------------------------
 
     @Test
@@ -303,6 +341,12 @@ class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
     private void expire(UUID auction, int rank) {
         jdbc.update("update auction_offers set expires_at = now() - interval '1 minute' where offer_rank = ? "
                 + "and auction_id = (select id from auctions where public_id = ?)", rank, auction);
+    }
+
+    private void pendingPayment(long orderId) {
+        jdbc.update("insert into payments (order_id, provider, txn_ref, amount) "
+                        + "select id, 'VNPAY', ?, total_amount from orders where id = ?",
+                UUID.randomUUID().toString().replace("-", ""), orderId);
     }
 
     private Map<String, Object> offer(UUID auction, int rank) {

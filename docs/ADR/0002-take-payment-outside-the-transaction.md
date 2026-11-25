@@ -1,7 +1,9 @@
 # ADR-0002: Take payment outside the database transaction and issue tickets after it
 
 ## Status
-Accepted (interim: the payment provider is a mock)
+Superseded by [ADR-0005](0005-confirm-vnpay-payments-in-the-ipn-callback.md). The mock gateway, `completePayment` and the
+synchronous charge described below no longer exist; the rule that no provider call runs inside a database transaction
+still holds.
 
 ## Context
 Two rules from `CLAUDE.md` and the schema shape the booking flow:
