@@ -6,11 +6,14 @@ import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.event.domain.Event;
 import com.bidtix.event.domain.EventStatus;
+import com.bidtix.event.domain.TicketZone;
+import com.bidtix.event.domain.ZoneType;
 import com.bidtix.event.domain.Venue;
 import com.bidtix.event.dtos.CreateEventRequest;
 import com.bidtix.event.dtos.EventDetailResponse;
 import com.bidtix.event.dtos.ZoneAvailabilityResponse;
 import com.bidtix.event.dtos.EventResponse;
+import com.bidtix.event.dtos.SeatResponse;
 import com.bidtix.event.infrastructure.EventRepository;
 import com.bidtix.event.infrastructure.SeatRepository;
 import com.bidtix.event.infrastructure.TicketZoneRepository;
@@ -84,6 +87,24 @@ public class EventService {
                         : freeSeats.getOrDefault(zone.getId(), 0L).intValue()))
                 .toList();
         return new EventDetailResponse(EventResponse.from(event), zones);
+    }
+
+    /**
+     * The seat map of one seated zone, visible like the event itself. A zone of another event is "not found"; a standing
+     * zone has no seats to show. A snapshot: booking decides whether a seat can still be had.
+     */
+    @Transactional(readOnly = true)
+    public List<SeatResponse> getSeats(UUID callerPublicId, UUID eventPublicId, UUID zonePublicId) {
+        Event event = findVisibleEvent(callerPublicId, eventPublicId);
+        TicketZone zone = ticketZoneRepository.findByPublicId(zonePublicId)
+                .filter(candidate -> candidate.getEvent().getId().equals(event.getId()))
+                .orElseThrow(() -> new BusinessException(ErrorCode.ZONE_NOTFOUND));
+        if (zone.getZoneType() != ZoneType.SEATED) {
+            throw invalid("A GENERAL_ADMISSION zone has no seats");
+        }
+        return seatRepository.findByZoneIdOrderByRowLabelAscSeatNumberAsc(zone.getId()).stream()
+                .map(SeatResponse::from)
+                .toList();
     }
 
     /** The event if the caller may see it: published, or their own. Call it inside a transaction. */

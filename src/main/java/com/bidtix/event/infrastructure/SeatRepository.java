@@ -95,6 +95,9 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
             "where s.zone.event.id = :eventId and s.status = 'AVAILABLE' group by s.zone.id")
     List<ZoneSeats> countAvailableByEventId(Long eventId);
 
+    /** All seats of a zone, as a seat map shows them: by row, then seat number. */
+    List<Seat> findByZoneIdOrderByRowLabelAscSeatNumberAsc(Long zoneId);
+
     interface ZoneSeats {
         Long getZoneId();
 

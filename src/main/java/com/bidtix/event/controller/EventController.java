@@ -6,6 +6,7 @@ import com.bidtix.event.dtos.CreateEventRequest;
 import com.bidtix.event.dtos.CreateZoneRequest;
 import com.bidtix.event.dtos.EventDetailResponse;
 import com.bidtix.event.dtos.EventResponse;
+import com.bidtix.event.dtos.SeatResponse;
 import com.bidtix.event.dtos.ZoneResponse;
 import com.bidtix.event.service.EventService;
 import com.bidtix.event.service.ZoneService;
@@ -23,6 +24,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.security.Principal;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -69,6 +71,13 @@ public class EventController {
     @GetMapping("/{eventPublicId}")
     public EventDetailResponse detail(@PathVariable UUID eventPublicId, Principal principal) {
         return eventService.getDetail(CurrentUser.publicId(principal), eventPublicId);
+    }
+
+    /** Every seat of a seated zone with its status, by row and number. Visible like the event itself. */
+    @GetMapping("/{eventPublicId}/zones/{zonePublicId}/seats")
+    public List<SeatResponse> seats(@PathVariable UUID eventPublicId, @PathVariable UUID zonePublicId,
+                                    Principal principal) {
+        return eventService.getSeats(CurrentUser.publicId(principal), eventPublicId, zonePublicId);
     }
 
     /** Published events that have not started yet, soonest first. Any logged-in user. */
