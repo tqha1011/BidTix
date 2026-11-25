@@ -7,6 +7,7 @@ import com.bidtix.event.dtos.CreateZoneRequest;
 import com.bidtix.event.dtos.EventDetailResponse;
 import com.bidtix.event.dtos.EventResponse;
 import com.bidtix.event.dtos.SeatResponse;
+import com.bidtix.event.dtos.UpdateEventRequest;
 import com.bidtix.event.dtos.ZoneResponse;
 import com.bidtix.event.service.EventService;
 import com.bidtix.event.service.ZoneService;
@@ -18,6 +19,7 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -62,6 +64,17 @@ public class EventController {
     @PreAuthorize("hasRole('ORGANIZER')")
     public EventResponse publish(@PathVariable UUID eventPublicId, Principal principal) {
         return eventService.publish(CurrentUser.publicId(principal), eventPublicId);
+    }
+
+    /**
+     * Replaces an event's data. A draft may change entirely, a published event only its title and description (409
+     * {@code EVENT_NOT_EDITABLE} otherwise). Only its organizer.
+     */
+    @PutMapping("/{eventPublicId}")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public EventResponse update(@PathVariable UUID eventPublicId, @Valid @RequestBody UpdateEventRequest request,
+                                Principal principal) {
+        return eventService.update(CurrentUser.publicId(principal), eventPublicId, request);
     }
 
     /** The logged-in organizer's own events, drafts included, newest first. */

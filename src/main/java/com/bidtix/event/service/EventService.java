@@ -14,6 +14,7 @@ import com.bidtix.event.dtos.EventDetailResponse;
 import com.bidtix.event.dtos.ZoneAvailabilityResponse;
 import com.bidtix.event.dtos.EventResponse;
 import com.bidtix.event.dtos.SeatResponse;
+import com.bidtix.event.dtos.UpdateEventRequest;
 import com.bidtix.event.infrastructure.EventRepository;
 import com.bidtix.event.infrastructure.SeatRepository;
 import com.bidtix.event.infrastructure.TicketZoneRepository;
@@ -29,6 +30,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -54,7 +57,7 @@ public class EventService {
     /** Creates a DRAFT event owned by the caller. */
     @Transactional
     public EventResponse createEvent(UUID organizerPublicId, CreateEventRequest request) {
-        validateTimes(request);
+        validateTimes(request.startsAt(), request.endsAt(), request.saleStartsAt(), request.saleEndsAt());
 
         User organizer = userRepository.findByPublicId(organizerPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
@@ -183,6 +186,53 @@ public class EventService {
         return PageResponse.from(eventRepository.findByOrganizerId(organizer.getId(), pageable).map(EventResponse::from));
     }
 
+    /**
+     * Replaces an event's data. Only its organizer; a DRAFT may change entirely, a PUBLISHED event only its title and
+     * description (tickets may have been sold for that place and time), a cancelled or completed one not at all. The
+     * entity's version makes a change that races with publishing fail with {@code CONCURRENT_UPDATE}. Evicts the cached
+     * public pages, which show the title.
+     */
+    @Transactional
+    @CacheEvict(cacheNames = CacheConfig.EVENTS, allEntries = true)
+    public EventResponse update(UUID organizerPublicId, UUID eventPublicId, UpdateEventRequest request) {
+        validateTimes(request.startsAt(), request.endsAt(), request.saleStartsAt(), request.saleEndsAt());
+        Event event = findOwnEvent(organizerPublicId, eventPublicId);
+        int maxTickets = request.maxTicketsPerUser() != null ? request.maxTicketsPerUser() : event.getMaxTicketsPerUser();
+
+        if (event.getStatus() == EventStatus.DRAFT) {
+            Venue venue = venueRepository.findByPublicId(request.venuePublicId())
+                    .orElseThrow(() -> new BusinessException(ErrorCode.VENUE_NOTFOUND));
+            event.reschedule(venue, request.startsAt(), request.endsAt(), request.saleStartsAt(),
+                    request.saleEndsAt(), maxTickets);
+        } else if (event.getStatus() != EventStatus.PUBLISHED || maxTickets != event.getMaxTicketsPerUser()
+                || !event.getVenue().getPublicId().equals(request.venuePublicId())
+                || !sameMoment(event.getStartsAt(), request.startsAt()) || !sameMoment(event.getEndsAt(), request.endsAt())
+                || !sameMoment(event.getSaleStartsAt(), request.saleStartsAt())
+                || !sameMoment(event.getSaleEndsAt(), request.saleEndsAt())) {
+            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE,
+                    "Only the title and description of a published event can be changed");
+        }
+        event.describe(request.title().trim(), request.description());
+        return EventResponse.from(eventRepository.saveAndFlush(event));
+    }
+
+    /** The caller's event. Call it inside a transaction. */
+    private Event findOwnEvent(UUID organizerPublicId, UUID eventPublicId) {
+        User organizer = userRepository.findByPublicId(organizerPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
+        Event event = eventRepository.findByPublicId(eventPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
+        if (!event.getOrganizerId().equals(organizer.getId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN);
+        }
+        return event;
+    }
+
+    /** The database keeps microseconds: a finer difference is no difference. */
+    private static boolean sameMoment(Instant stored, Instant sent) {
+        return stored.truncatedTo(ChronoUnit.MICROS).equals(sent.truncatedTo(ChronoUnit.MICROS));
+    }
+
     /** The cache key of a list page, built from the corrected paging values. Public because SpEL calls it. */
     public static String pageKey(int page, int size) {
         return clampPage(page) + ":" + clampSize(size);
@@ -205,14 +255,14 @@ public class EventService {
     }
 
     /** Mirrors {@code ck_events_show_time} and {@code ck_events_sale_window}, so the client gets a clear 400. */
-    private static void validateTimes(CreateEventRequest r) {
-        if (!r.endsAt().isAfter(r.startsAt())) {
+    private static void validateTimes(Instant startsAt, Instant endsAt, Instant saleStartsAt, Instant saleEndsAt) {
+        if (!endsAt.isAfter(startsAt)) {
             throw invalid("endsAt must be after startsAt");
         }
-        if (!r.saleEndsAt().isAfter(r.saleStartsAt())) {
+        if (!saleEndsAt.isAfter(saleStartsAt)) {
             throw invalid("saleEndsAt must be after saleStartsAt");
         }
-        if (r.saleEndsAt().isAfter(r.startsAt())) {
+        if (saleEndsAt.isAfter(startsAt)) {
             throw invalid("Ticket sales must end no later than startsAt");
         }
     }
