@@ -1,0 +1,16 @@
+# Several application instances behind nginx (APP_REPLICAS=2 loadtest/run.sh ...). Each instance has the CPU, memory and
+# database pool of compose.yaml; all of them share one PostgreSQL, one Redis and the same JWT keys.
+services:
+  app:
+    deploy:
+      replicas: ${APP_REPLICAS:-2}
+
+  proxy:
+    image: nginx:1.29-alpine
+    cpus: ${PROXY_CPUS:-1}
+    mem_limit: 256m
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      app:
+        condition: service_started
