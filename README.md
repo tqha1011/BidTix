@@ -62,7 +62,11 @@ all on one PostgreSQL database with Redis used only where losing it cannot break
 - **Payments that survive bad timing:** signed callbacks are stored, applied exactly once, and marked for refund when
   the order can no longer take the money.
 - **Safe with several instances:** background jobs claim their rows with `FOR UPDATE SKIP LOCKED`.
-- **Load tested end to end:** in a 30-minute simulated sale (259,006 requests) all 15 data integrity checks passed.
+- **Load tested over HTTP:** 1,300+ requests/s with p95 under 350 ms at up to 150 concurrent requests and no failed
+  request (70% reads, 30% bookings; one application instance and PostgreSQL, 4 CPUs each; one laptop; three
+  [runs](#measured-results)). Over those runs 1,021,596 bookings left the stock counter matching the orders.
+- **Checked under a simulated sale:** in 30 minutes with up to 1,000 shoppers and 150 bidders (259,006 requests, one run
+  on 2 CPUs) 99.98% of requests succeeded and all 15 data integrity checks passed.
 
 **Skills shown:** concurrency control and transaction design, PostgreSQL locking and constraints, idempotent APIs,
 payment gateway integration, caching and rate limiting with Redis, JWT authentication, integration and concurrency
@@ -71,6 +75,16 @@ testing, benchmarking and load testing, writing architecture decision records.
 **Scope of these claims.** Payments run against VNPAY's sandbox only, and refunds are not proven there yet. All
 performance figures come from simulated traffic on one laptop. There is no web or mobile client. Cancelling an event,
 the per-user ticket limit and ticket check-in are not built. See [Limitations and roadmap](#limitations-and-roadmap).
+
+**Quoting the performance figures** (for a portfolio or a CV):
+
+- Keep the conditions with the number: 4 CPUs each for the application and PostgreSQL, 70% reads and 30% bookings,
+  one laptop that also ran the load generator. They are not production capacity.
+- The p95 under 350 ms is over **all** requests. Bookings alone reached 753 ms at 100 to 150 concurrent requests.
+- "Concurrent requests" means requests open at the same moment, not users.
+- A booking in the load test reserves stock; it does not pay.
+- Do not state a speed-up between 2 and 4 CPUs: the laptop's CPU clock differed between those configurations.
+- The runs with several instances in the load test log are inconclusive experiments, not results to quote.
 
 ## Architecture
 
@@ -332,7 +346,22 @@ so compare the figures with each other rather than reading them as production ca
 
 **Cancelling unpaid orders:** 100 orders per transaction was 20 to 35 times faster than one per transaction.
 
-**Load test over HTTP** (k6; application and PostgreSQL limited to 2 CPUs each)
+**Load test over HTTP, 4 CPUs** (k6; one application instance and PostgreSQL limited to 4 CPUs each, connection pool
+of 10; 70% reads, 30% bookings of one standing ticket, all from the same zone counter; 60 s per level; three runs on
+2026-11-26 at commit `bff74cf`; raw results in the [load test log](docs/load-test-log.md), runs 17 and 18)
+
+| Requests open at once | Requests/s, run 1 / 2 / 3 | p95 ms, all requests | p95 ms, bookings only |
+|--:|--:|--:|--:|
+| 50 | 1,492 / 1,787 / 1,417 | 103 / 79 / 111 | 239 / 128 / 273 |
+| 100 | 1,433 / 1,312 / 1,758 | 246 / 252 / 165 | 475 / 588 / 381 |
+| 150 | 1,802 / 1,452 / 1,452 | 245 / 331 / 343 | 476 / 753 / 711 |
+| 200 | 1,444 / 1,751 / 1,405 | 429 / 337 / 512 | 1,015 / 615 / 939 |
+
+No request failed in any measured level (warm-up is not counted), and the stock counter matched the orders after every
+run. At 200 open requests one run of three went over a p95 of 500 ms. The same level differs by up to about 35% between
+runs; the cause was not isolated. The highest level tried was 200.
+
+**Load test over HTTP, 2 CPUs** (k6; application and PostgreSQL limited to 2 CPUs each; commit `6dd5be7`)
 
 | Measure | Result |
 |---|---|
