@@ -8,6 +8,8 @@
 #
 # Knobs (environment): RATES="100 200 ..." USER_LEVELS="1000 2000 ..." WARMUP STEP CONFIRM RAMP (seconds),
 # POOL (database connections) APP_CPUS DB_CPUS, KEEP=1 leaves the stack running afterwards.
+#   APP_REPLICAS=2 runs that many instances behind nginx (compose.scale.yaml, PROXY_CPUS); each has APP_CPUS and its own
+#   pool. Without it there is one instance and nothing in front of it.
 set -euo pipefail
 
 # A machine that goes to sleep ruins a run (the clocks jump and the tokens expire), so sleep is held off until the
@@ -45,10 +47,15 @@ WARM_CLIENTS=${WARM_CLIENTS:-50}
 WARM_MIN=${WARM_MIN:-3}
 WARM_MAX=${WARM_MAX:-6}
 COMPOSE_EXTRA=
-METRICS_URL=
+METRICS_URLS=()
 SERVER_ROWS=
+APP_REPLICAS=${APP_REPLICAS:-}
+if [[ -n $APP_REPLICAS ]]; then export APP_REPLICAS; fi
 
-compose() { docker compose -f loadtest/compose.yaml ${COMPOSE_EXTRA:+-f "$COMPOSE_EXTRA"} "$@"; }
+compose() {
+    docker compose -f loadtest/compose.yaml ${COMPOSE_EXTRA:+-f "$COMPOSE_EXTRA"} \
+        ${APP_REPLICAS:+-f loadtest/compose.scale.yaml} "$@"
+}
 say() { printf '\n== %s\n' "$*" >&2; }
 die() { echo "loadtest: $*" >&2; exit 1; }
 record() { printf '%s\n' "$*" | tee -a "$RESULTS"; }
@@ -63,8 +70,21 @@ cleanup() {
 save_logs() {
     if [[ -n $(compose ps -q app 2>/dev/null) ]]; then
         mkdir -p "$OUT/logs"
-        compose logs --no-color -t app database >"$OUT/logs/$(date +%Y%m%d-%H%M%S).log" 2>&1 || true
+        compose logs --no-color -t app database ${APP_REPLICAS:+proxy} >"$OUT/logs/$(date +%Y%m%d-%H%M%S).log" 2>&1 || true
     fi
+}
+
+container_ip() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$@"; }
+
+# wait_for <url of an instance or of the proxy>
+wait_for() {
+    local attempt
+    for attempt in $(seq 120); do
+        if curl -sf -o /dev/null --max-time 2 "$1/v3/api-docs"; then return; fi
+        sleep 1
+    done
+    compose logs --tail 50 app ${APP_REPLICAS:+proxy} >&2
+    die "the application did not start"
 }
 
 query() { compose exec -T database psql -At -F ' ' -v ON_ERROR_STOP=1 -U bidtix -d bidtix "$@"; }
@@ -76,17 +96,21 @@ reset_stack() {
     loadtest/tokens.sh "$OUT" "$USERS"
     compose up -d >/dev/null 2>&1 || { compose logs --tail 50 >&2; die "the stack did not start"; }
 
-    local ip
-    ip=$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$(compose ps -q app)")
-    # straight to the container: Docker's port proxy would be one more thing competing for the CPU
-    BASE_URL=http://$ip:8080
-    if [[ -n $COMPOSE_EXTRA ]]; then METRICS_URL=http://$ip:9001; fi
-    local attempt
-    for attempt in $(seq 120); do
-        if curl -sf -o /dev/null --max-time 2 "$BASE_URL/v3/api-docs"; then break; fi
-        if [[ $attempt == 120 ]]; then compose logs --tail 50 app >&2; die "the application did not start"; fi
-        sleep 1
+    local ips ip
+    # shellcheck disable=SC2046
+    mapfile -t ips < <(container_ip $(compose ps -q app))
+    [[ ${#ips[@]} == "${APP_REPLICAS:-1}" ]] || die "expected ${APP_REPLICAS:-1} instances, found ${#ips[@]}"
+    METRICS_URLS=()
+    for ip in "${ips[@]}"; do
+        wait_for "http://$ip:8080"
+        if [[ -n $COMPOSE_EXTRA ]]; then METRICS_URLS+=("http://$ip:9001"); fi
     done
+    # straight to a container: Docker's port proxy would be one more thing competing for the CPU
+    BASE_URL=http://${ips[0]}:8080
+    if [[ -n $APP_REPLICAS ]]; then
+        BASE_URL=http://$(container_ip "$(compose ps -q proxy)"):8080
+        wait_for "$BASE_URL"
+    fi
     query -q -v users="$USERS" -f - <loadtest/seed.sql >/dev/null
 }
 
@@ -111,7 +135,7 @@ run_k6() {
             # shellcheck disable=SC2086
             docker stats --no-stream --format '{{.Name}} {{.CPUPerc}}' $containers >>"$base.stats"
             ps -o %cpu=,rss= -p "$K6_PID" | awk '{print "k6", $1, $2}' >>"$base.stats" || true
-            if [[ -n $METRICS_URL ]]; then sample_app >>"$base.stats"; fi
+            if ((${#METRICS_URLS[@]})); then sample_app >>"$base.stats"; fi
         fi
         if (($(awk '/MemAvailable/ {print int($2 / 1024)}' /proc/meminfo) < MIN_FREE_MB)); then
             starved=1
@@ -125,28 +149,48 @@ run_k6() {
     if ((starved)); then return 2; fi
 }
 
-# One figure of the application's own metrics; nothing when it cannot be had within two seconds.
+# metric <instance's metrics URL> <name> <statistic>: one figure of that instance's own metrics; nothing when it cannot
+# be had within two seconds.
 metric() {
-    curl -sf --max-time 2 -H "Authorization: Bearer $(jq -r '.[0]' "$OUT/tokens.json")" "$METRICS_URL/actuator/metrics/$1" |
-        jq -r --arg s "$2" '.measurements[] | select(.statistic == $s) | .value' || true
+    curl -sf --max-time 2 -H "Authorization: Bearer $(jq -r '.[0]' "$OUT/tokens.json")" "$1/actuator/metrics/$2" |
+        jq -r --arg s "$3" '.measurements[] | select(.statistic == $s) | .value' || true
 }
 
 # lines "m <name> <seconds since 1970> <value>": busy request threads, database connections in use and waited for,
-# and the running totals of how often and how long connections were held and waited for
+# and the running totals of how often and how long connections were held and waited for. Added up over the instances;
+# a figure that one of them did not give is left out, because a partial sum would look like a drop.
 sample_app() {
-    local spec name statistic value
+    local spec name statistic value url values
     for spec in tomcat.threads.busy:VALUE hikaricp.connections.active:VALUE hikaricp.connections.pending:VALUE \
         hikaricp.connections.usage:COUNT hikaricp.connections.usage:TOTAL_TIME \
         hikaricp.connections.acquire:COUNT hikaricp.connections.acquire:TOTAL_TIME; do
         name=${spec%:*} statistic=${spec#*:}
-        value=$(metric "$name" "$statistic")
-        if [[ -n $value ]]; then echo "m $name:$statistic $(date +%s.%N) $value"; fi
+        values=()
+        for url in "${METRICS_URLS[@]}"; do
+            value=$(metric "$url" "$name" "$statistic")
+            if [[ -n $value ]]; then values+=("$value"); fi
+        done
+        if ((${#values[@]} == ${#METRICS_URLS[@]})); then
+            value=$(printf '%s\n' "${values[@]}" | awk '{sum += $1} END {printf "%.6f", sum}')
+            echo "m $name:$statistic $(date +%s.%N) $value"
+        fi
     done
 }
 
-# average CPU of one container over a run, in percent of one core (200% = two cores fully used)
+# how many requests each instance has answered since it started: shows that the load balancer really spread them
+requests_per_instance() {
+    local url counts=()
+    for url in "${METRICS_URLS[@]}"; do
+        counts+=("$(metric "$url" http.server.requests COUNT | awk '{printf "%.0f", $1}')")
+    done
+    echo "${counts[*]}"
+}
+
+# average CPU of one service over a run, in percent of one core (200% = two cores fully used); the instances of a
+# service that has several are added up
 cpu_of() {
-    awk -v name="-$2-" 'index($1, name) {sub("%", "", $2); sum += $2; n++} END {if (n) printf "%.0f%%", sum / n; else printf "-"}' "$1"
+    awk -v name="-$2-" 'index($1, name) {sub("%", "", $2); sum[$1] += $2; n[$1]++}
+        END {for (c in n) {total += sum[c] / n[c]; found = 1}; if (found) printf "%.0f%%", total; else printf "-"}' "$1"
 }
 
 table_header() {
@@ -304,7 +348,7 @@ level() {
         "| \($label) | \(.target) | \(.rps | round) | \(.avg | round) | \(.p95 | round) | \(.p99 | round) | " +
         "\(.readP95 | round) | \(.bookP95 | round) | \(.failed | pct) | \(.timeouts) | \(.open | round) | " +
         "\(if .pass then "good" elif .broken then "**broken**" else "slow" end) |"' "$summary")"
-    SERVER_ROWS+="| $label | $clients | $(server_figures "$stats") | $(cpu_of "$stats" app) | $(cpu_of "$stats" database) | $(cpu_of "$stats" cache) | $(awk '$1 == "k6" {cpu = $2} END {printf "%.0f%%", cpu}' "$stats") | $(awk '$1 == "k6" && $3 > max {max = $3} END {printf "%.0f MB", max / 1024}' "$stats") |"$'\n'
+    SERVER_ROWS+="| $label | $clients | $(server_figures "$stats") | $(cpu_of "$stats" app) | $(cpu_of "$stats" database) | $(cpu_of "$stats" cache) | $(cpu_of "$stats" proxy) | $(awk '$1 == "k6" {cpu = $2} END {printf "%.0f%%", cpu}' "$stats") | $(awk '$1 == "k6" && $3 > max {max = $3} END {printf "%.0f MB", max / 1024}' "$stats") |"$'\n'
     jq -e .pass "$summary" >/dev/null
 }
 
@@ -363,12 +407,14 @@ concurrency_round() {
     fi
 
     record ""
-    record "Server side (CPU: 100% = one core; connections: pool of ${POOL:-10})."
+    record "Server side (CPU: 100% = one core; connections: pool of ${POOL:-10} per instance, figures added up over ${APP_REPLICAS:-1})."
     record ""
-    record "| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | k6 CPU | k6 RAM |"
-    record "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|"
+    record "| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |"
+    record "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|"
     record "${SERVER_ROWS%$'\n'}"
     check_stock
+    record ""
+    record "Requests answered by each instance since it started: $(requests_per_instance)."
     record ""
     if ((${#files[@]})); then
         record "$(jq -rs '[.[] | select(.broken | not)] | max_by(.rps) // empty | "**Highest rate without breaking: \(.rps | round) req/s**, with \(.target) requests open, p95 \(.p95 | round) ms."' "${files[@]}")"
@@ -431,7 +477,7 @@ others=$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'
 record "# Load test, $(date '+%Y-%m-%d %H:%M')"
 record ""
 record "- Commit $(git rev-parse --short HEAD)$([[ -n $(git status --porcelain -- src pom.xml) ]] && echo ' with uncommitted changes in src or pom.xml')"
-record "- $(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo), $(nproc) threads; app ${APP_CPUS:-2} CPU / 2 GB, PostgreSQL ${DB_CPUS:-2} CPU / 1 GB, Redis 1 CPU; pool ${POOL:-10}"
+record "- $(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo), $(nproc) threads; ${APP_REPLICAS:-1} x app ${APP_CPUS:-2} CPU / 2 GB$([[ -n $APP_REPLICAS ]] && echo " behind nginx ${PROXY_CPUS:-1} CPU"), PostgreSQL ${DB_CPUS:-2} CPU / 1 GB, Redis 1 CPU; pool ${POOL:-10}"
 record "- $(k6 version | head -1 | awk '{print $1, $2}') on the same machine$([[ $what == concurrency ]] || echo '; pass = p95 < 500 ms, failed < 1%, dropped < 1%')"
 record "- Other containers running during the test: ${others:-none}"
 
