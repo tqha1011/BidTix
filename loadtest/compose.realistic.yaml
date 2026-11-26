@@ -1,0 +1,17 @@
+# Overrides compose.yaml for the "sale day" run (soak.sh): real logins, and payments confirmed by callbacks that the
+# load test signs itself, with a secret that exists only here. Nothing calls VNPAY.
+services:
+  app:
+    environment:
+      VNP_TMNCODE: LOADTEST
+      VNP_HASH_SECRET: loadtest-only-secret
+      # k6 talks plain http, and a Secure cookie would never be sent back
+      BIDTIX_AUTH_REFRESHCOOKIE_SECURE: "false"
+      # Every simulated person comes from one address, so the limits per IP would stop the test long before the
+      # application does. The limiter stays on and is still called.
+      SPRING_APPLICATION_JSON: >-
+        {"bidtix": {"payment": {"refund-cron": "-"}, "rate-limit": {"policies": {
+         "default-user": {"capacity": 1000000, "refill-tokens": 1000000, "refill-every": "1s"},
+         "auth-login": {"limit": 1000000, "window": "1m"},
+         "vnpay-ipn": {"capacity": 1000000, "refill-tokens": 1000000, "refill-every": "1s"},
+         "vnpay-return": {"capacity": 1000000, "refill-tokens": 1000000, "refill-every": "1s"}}}}}

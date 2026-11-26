@@ -4,7 +4,7 @@
 MVN := ./mvnw
 
 .DEFAULT_GOAL := help
-.PHONY: help keys run run-local run-seed test bench bench-gate bench-cancel test-one build clean db-up db-down psql
+.PHONY: help keys run run-local run-seed test bench bench-gate bench-cancel load-test sale-day test-one build clean db-up db-down psql
 
 help: ## Show this list
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -58,6 +58,12 @@ bench-cancel: ## Benchmark cancelling unpaid orders, 1 vs many orders per transa
 	$(MVN) test -Dgroups=benchmark -Dbenchmark.excludedGroups=none -Dtest=OrderCancellationBenchmarkTest \
 		-Dspring.datasource.hikari.maximum-pool-size=$(or $(POOL),40) $(if $(RUNS),-Dbench.runs=$(RUNS)) \
 		$(if $(SCALE),-Dbench.scale=$(SCALE)) $(if $(SIZES),-Dbench.sizes=$(SIZES)) $(if $(BOOKERS),-Dbench.bookers=$(BOOKERS))
+
+load-test: ## Load test the whole app over HTTP (Docker, k6): make load-test [PROFILE=smoke|read|book|mixed|users|concurrency|all]
+	loadtest/run.sh $(or $(PROFILE),all)
+
+sale-day: ## 30 minutes of simulated buyers and bidders, then data checks: make sale-day [MINUTES=30] [BASE=300] [PEAK=1000] [BIDDERS=150]
+	loadtest/soak.sh
 
 build: ## Build the jar without running tests
 	$(MVN) clean package -DskipTests

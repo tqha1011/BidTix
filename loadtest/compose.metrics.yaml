@@ -1,0 +1,12 @@
+# Overrides compose.yaml for the concurrency run (run.sh concurrency).
+services:
+  app:
+    environment:
+      # As in compose.yaml (limiter on but nobody refused, no refund calls), plus:
+      #  - actuator metrics on their own port (a token is still needed), with Tomcat's thread figures
+      #  - orders stay payable for two hours, so the cancellation job does not start working halfway through a run
+      SPRING_APPLICATION_JSON: >-
+        {"bidtix": {"payment": {"refund-cron": "-"}, "booking": {"order-expiration-minutes": 120},
+         "rate-limit": {"policies": {"default-user": {"capacity": 1000000, "refill-tokens": 1000000, "refill-every": "1s"}}}},
+         "management": {"server": {"port": 9001}, "endpoints": {"web": {"exposure": {"include": "health,metrics"}}}},
+         "server": {"tomcat": {"mbeanregistry": {"enabled": true}}}}

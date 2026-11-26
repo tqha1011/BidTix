@@ -1,8 +1,10 @@
 package com.bidtix.event.service;
 
+import com.bidtix.common.dtos.PageResponse;
 import com.bidtix.config.CacheConfig;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
+import com.bidtix.event.domain.Venue;
 import com.bidtix.event.dtos.CreateVenueRequest;
 import com.bidtix.event.dtos.VenueResponse;
 import com.bidtix.event.infrastructure.VenueRepository;
@@ -85,5 +87,82 @@ class VenueCacheIntegrationTest extends PostgresIntegrationTest {
 
         Cache cache = cacheManager.getCache(CacheConfig.VENUES);
         assertThat(cache.get(missing)).isNull();
+    }
+
+    // ---- the venue list ----
+
+    private static String pageRedisKey(String page) {
+        return "bidtix-backend:venue-pages::" + page;
+    }
+
+    private void awaitPageCached(String page) {
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() ->
+                assertThat(redis.hasKey(pageRedisKey(page))).as("page %s is cached", page).isTrue());
+    }
+
+    /** Shorter than the TTL on purpose: an entry that merely expires must not pass for an evicted one. */
+    private void awaitPageEvicted(String page) {
+        await().atMost(Duration.ofSeconds(3)).untilAsserted(() ->
+                assertThat(redis.hasKey(pageRedisKey(page))).as("page %s is evicted", page).isFalse());
+    }
+
+    /** Reads page 0 of size 1 into an empty cache and waits for the entry. */
+    private PageResponse<VenueResponse> cacheFirstPage() {
+        redis.delete(pageRedisKey("0:1"));
+        PageResponse<VenueResponse> page = venueService.list(0, 1);
+        awaitPageCached("0:1");
+        return page;
+    }
+
+    @Test
+    void secondListRead_isServedFromRedis_notFromPostgres() {
+        PageResponse<VenueResponse> first = cacheFirstPage();
+
+        // A row added behind the cache's back: a read that does not count it can only come from Redis.
+        venueRepository.save(new Venue("Back Door " + UUID.randomUUID(), "1 Test Street", "Hanoi"));
+
+        assertThat(venueService.list(0, 1)).isEqualTo(first);
+    }
+
+    @Test
+    void listCacheKey_usesTheCorrectedPaging_soOneEntryServesBothSpellings() {
+        redis.delete(pageRedisKey("0:100"));
+
+        venueService.list(-3, 1000);
+
+        awaitPageCached("0:100");
+        assertThat(redis.hasKey(pageRedisKey("-3:1000"))).isFalse();
+    }
+
+    @Test
+    void creatingAVenue_evictsTheCachedList() {
+        long before = cacheFirstPage().totalElements();
+
+        newVenue();
+
+        awaitPageEvicted("0:1");
+        assertThat(venueService.list(0, 1).totalElements()).isEqualTo(before + 1);
+    }
+
+    @Test
+    void updatingAVenue_evictsTheCachedList() {
+        VenueResponse venue = newVenue();
+        cacheFirstPage();
+
+        venueService.update(venue.publicId(),
+                new CreateVenueRequest("Renamed " + UUID.randomUUID(), "2 Test Street", "Hue"));
+
+        awaitPageEvicted("0:1");
+    }
+
+    @Test
+    void deletingAVenue_evictsTheCachedList() {
+        VenueResponse venue = newVenue();
+        long before = cacheFirstPage().totalElements();
+
+        venueService.delete(venue.publicId());
+
+        awaitPageEvicted("0:1");
+        assertThat(venueService.list(0, 1).totalElements()).isEqualTo(before - 1);
     }
 }

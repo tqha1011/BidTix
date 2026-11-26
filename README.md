@@ -249,6 +249,29 @@ make bench-gate     # the booking gate on the real booking flow, on and off
 make bench-cancel   # cancelling unpaid orders, 1 vs many orders per transaction
 ```
 
+The whole application can be load tested over HTTP with k6 (`Dockerfile` and `loadtest/`):
+
+```bash
+make load-test      # requests per second and users at once, with p95 < 500 ms and < 1% failures
+make load-test PROFILE=concurrency    # highest rate, and how many requests can be open at once
+make sale-day       # 30 minutes of people logging in, buying, paying and bidding, then 15 data checks
+```
+
+With the application and PostgreSQL limited to 2 CPUs each on one laptop, 70% reads and 30% bookings:
+
+| | measured |
+|---|---|
+| highest rate | about 500-590 requests/s |
+| requests open at once with p95 < 500 ms | about 75 |
+| requests open at once without a failure | 3,200, each then waiting about 6 s |
+| breaking point | between 3,200 and 6,400 open requests (10 s timeouts) |
+
+A just-started instance carries much less until the JVM has warmed up.
+
+In a 30-minute simulated sale (up to 1,000 shoppers and 150 bidders, 259,006 requests), p95 stayed between 7 and 24 ms
+outside the first minute and the 380 ms minute in which the sale opened; the only 41 failed requests came in the first
+minute, right after start-up, and every data check passed.
+
 Method, numbers and caveats: [`docs/benchmarks.md`](docs/benchmarks.md).
 
 ## Documentation
@@ -260,7 +283,8 @@ Method, numbers and caveats: [`docs/benchmarks.md`](docs/benchmarks.md).
   - [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md): take standing-zone stock with a conditional UPDATE
   - [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md): refuse known sold-out requests with a short-lived Redis flag
   - [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md): confirm VNPAY payments in the IPN callback
-- [`docs/benchmarks.md`](docs/benchmarks.md): anti-overselling strategies, the booking gate and order cancellation, measured
+- [`docs/benchmarks.md`](docs/benchmarks.md): anti-overselling strategies, the booking gate, order cancellation and the load test, measured
+- [`docs/load-test-log.md`](docs/load-test-log.md): every load test run, with machine, times, conditions and raw results
 - [`CLAUDE.md`](CLAUDE.md): conventions and rules for working in this repository
 
 ## Roadmap

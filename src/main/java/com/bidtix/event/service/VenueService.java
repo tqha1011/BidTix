@@ -11,6 +11,7 @@ import com.bidtix.event.infrastructure.VenueRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
+import org.springframework.cache.annotation.Caching;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -28,22 +29,33 @@ public class VenueService {
     private final VenueRepository venueRepository;
 
     @Transactional
+    @CacheEvict(cacheNames = CacheConfig.VENUE_PAGES, allEntries = true)
     public VenueResponse create(CreateVenueRequest request) {
         Venue venue = venueRepository.save(
                 new Venue(request.name().trim(), request.address().trim(), request.city().trim()));
         return VenueResponse.from(venue);
     }
 
-    /** Venues by name. Not cached. Bad paging values are corrected (negative page -> 0, size clamped to 1..100). */
+    /**
+     * Venues by name. Bad paging values are corrected (negative page -> 0, size clamped to 1..100).
+     *
+     * <p>Cached per corrected (page, size), see {@link #pageKey}, so the spellings of one page share an entry.
+     * Entries live for the TTL in application.yaml and are all cleared by {@link #create}, {@link #update} and
+     * {@link #delete}: one change can move venues between pages.
+     */
+    @Cacheable(cacheNames = CacheConfig.VENUE_PAGES, sync = true,
+            key = "T(com.bidtix.event.service.VenueService).pageKey(#page, #size)")
     @Transactional(readOnly = true)
     public PageResponse<VenueResponse> list(int page, int size) {
-        var pageable = PageRequest.of(Math.max(page, 0), Math.clamp(size, 1, MAX_PAGE_SIZE), Sort.by("name", "id"));
+        var pageable = PageRequest.of(clampPage(page), clampSize(size), Sort.by("name", "id"));
         return PageResponse.from(venueRepository.findAll(pageable).map(VenueResponse::from));
     }
 
-    /** Replaces a venue's data. The cached entry is evicted after the commit. */
+    /** Replaces a venue's data. The cached entry and the cached list pages are evicted after the commit. */
     @Transactional
-    @CacheEvict(cacheNames = CacheConfig.VENUES, key = "#publicId")
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.VENUES, key = "#publicId"),
+            @CacheEvict(cacheNames = CacheConfig.VENUE_PAGES, allEntries = true)})
     public VenueResponse update(UUID publicId, CreateVenueRequest request) {
         Venue venue = venueRepository.findByPublicId(publicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VENUE_NOTFOUND));
@@ -53,7 +65,9 @@ public class VenueService {
 
     /** Removes a venue no event uses; the foreign key decides ({@code VENUE_IN_USE}). */
     @Transactional
-    @CacheEvict(cacheNames = CacheConfig.VENUES, key = "#publicId")
+    @Caching(evict = {
+            @CacheEvict(cacheNames = CacheConfig.VENUES, key = "#publicId"),
+            @CacheEvict(cacheNames = CacheConfig.VENUE_PAGES, allEntries = true)})
     public void delete(UUID publicId) {
         Venue venue = venueRepository.findByPublicId(publicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VENUE_NOTFOUND));
@@ -78,5 +92,18 @@ public class VenueService {
         return venueRepository.findByPublicId(publicId)
                 .map(VenueResponse::from)
                 .orElseThrow(() -> new BusinessException(ErrorCode.VENUE_NOTFOUND));
+    }
+
+    /** The cache key of a list page, built from the corrected paging values. Public because SpEL calls it. */
+    public static String pageKey(int page, int size) {
+        return clampPage(page) + ":" + clampSize(size);
+    }
+
+    private static int clampPage(int page) {
+        return Math.max(page, 0);
+    }
+
+    private static int clampSize(int size) {
+        return Math.clamp(size, 1, MAX_PAGE_SIZE);
     }
 }

@@ -50,6 +50,8 @@ import java.time.Duration;
 public class CacheConfig {
 
     public static final String VENUES = "venues";
+    /** Pages of the venue list, see {@code VenueService#list}. */
+    public static final String VENUE_PAGES = "venue-pages";
     /** Pages of the public list of published events, see {@code EventService#listPublished}. */
     public static final String EVENTS = "events";
 
@@ -60,6 +62,8 @@ public class CacheConfig {
     public RedisCacheManagerBuilderCustomizer cacheSerialization(RedisConnectionFactory connectionFactory) {
         JsonMapper mapper = JsonMapper.builder().build();
         JavaType eventPage = mapper.getTypeFactory().constructParametricType(PageResponse.class, EventResponse.class);
+
+        JavaType venuePage = mapper.getTypeFactory().constructParametricType(PageResponse.class, VenueResponse.class);
 
         // cacheDefaults() already carries the TTL and key prefix from application.yaml; only the value format changes
         RedisCacheWriter lockingWriter = RedisCacheWriter.lockingRedisCacheWriter(connectionFactory,
@@ -72,6 +76,9 @@ public class CacheConfig {
                 .withCacheConfiguration(VENUES, builder.cacheDefaults()
                         .serializeValuesWith(SerializationPair.fromSerializer(
                                 new JacksonJsonRedisSerializer<>(VenueResponse.class))))
+                .withCacheConfiguration(VENUE_PAGES, builder.cacheDefaults()
+                        .serializeValuesWith(SerializationPair.fromSerializer(
+                                new JacksonJsonRedisSerializer<>(mapper, venuePage))))
                 .withCacheConfiguration(EVENTS, builder.cacheDefaults()
                         .serializeValuesWith(SerializationPair.fromSerializer(
                                 new JacksonJsonRedisSerializer<>(mapper, eventPage))));

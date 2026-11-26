@@ -1,0 +1,10 @@
+# Everything is left out unless listed below, so a new secret file can never end up in the image by accident.
+*
+
+# What the Maven build in the Dockerfile needs
+!pom.xml
+!src
+
+# Never send secrets, even from inside an allowed folder
+**/.env
+**/*.pem

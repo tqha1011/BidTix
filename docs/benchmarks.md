@@ -462,3 +462,202 @@ same zone (`bookTicket`, mock payment). "before" is the 2 s before the job start
 **Decision.** `OrderCancellationJob` uses one transaction per batch of 100 orders. If a batch fails, its orders are retried one
 per transaction, so a single bad order does not hold back the others (a test covers it: without the retry, one order that
 cannot be cancelled made every batch containing it roll back, once a minute, for good).
+
+## Load test through the API
+
+How many requests per second, and how many users at once, the whole application carries: real HTTP requests from k6
+against the application in Docker, with PostgreSQL and Redis. The raw record of every run, with the machine, times and
+conditions, is in [load-test-log.md](load-test-log.md).
+
+```bash
+make load-test                         # everything, about 45 minutes; needs Docker, k6, openssl, jq, curl
+make load-test PROFILE=smoke           # a few minutes: does the setup work
+make load-test PROFILE=book            # one of read | book | mixed | users
+POOL=30 make load-test PROFILE=book    # another connection pool size; also APP_CPUS, DB_CPUS, RATES, USER_LEVELS
+```
+
+Results are written to `target/loadtest/results-<time>.md`; the raw k6 output and CPU samples of each run are in
+`target/loadtest/runs/` (overwritten by the next run).
+
+**Setup** (`loadtest/`): its own compose project with a fresh database per profile; application 2 CPU / 2 GB, PostgreSQL
+2 CPU / 1 GB, Redis 1 CPU; connection pool 10 and Tomcat's defaults. Data: 5,000 customers, 50 published events, and one
+standing zone that never sells out. Access tokens are signed beforehand with a throwaway key, so **login is not
+measured** (it would measure BCrypt). The rate limiter stays on with a limit nobody reaches, so each request still pays
+for its Redis call. The refund job is off, and no payment route is called.
+
+**Traffic**
+
+| profile | requests |
+|---|---|
+| read | half `GET /events` (cached in Redis), half `GET /events/{id}` (not cached) |
+| book | `POST /orders`, one standing ticket, every request in the same zone, each with a new `Idempotency-Key` |
+| mixed | 90% read, 10% book |
+
+**Pass mark:** p95 under 500 ms, under 1% failed requests, and under 1% of requests k6 could not send on time. A step
+holds a fixed rate for 60 s; the best passing rate is then held for 180 s. In the users test every user waits 1-3 s
+between two requests; users arrive over 30 s and only the 180 s after that are measured.
+
+### Results
+
+Run of 2026-11-25 on commit `6dd5be7`: 12th Gen Intel i5-12450HX (12 threads), k6 2.0.0 on the same machine, no other
+containers running, one run per cell.
+
+| profile | held for 180 s | p50 ms | p95 ms | p99 ms | failed | first failing step |
+|---|--:|--:|--:|--:|--:|--:|
+| read | **600 req/s** | 3 | 6 | 15 | 0% | 800 req/s |
+| mixed (90/10) | **600 req/s** | 3 | 11 | 21 | 0% | 800 req/s |
+| book | **200 req/s**, once warm (see below) | 11 | 27 | 153 | 0% | 400 req/s (300 also failed) |
+
+| users at once | req/s | p50 ms | p95 ms | p99 ms | failed | pass |
+|--:|--:|--:|--:|--:|--:|---|
+| **1,000** | 489 | 4 | 239 | 784 | 0% | yes |
+| 2,000 | 539 | 1,697 | 3,192 | 4,311 | 0% | no |
+
+What the failing steps looked like (CPU is the average over the run; 200% = both cores busy):
+
+| step | req/s reached | p95 ms | requests not sent on time | app CPU | database CPU |
+|---|--:|--:|--:|--:|--:|
+| read, 800 req/s | 781 | 2,123 | 2.4% | 186% | 100% |
+| mixed, 800 req/s | 650 | 5,642 | 18.7% | 191% | 109% |
+| book, 400 req/s | 385 | 3,367 | 3.8% | 192% | 182% |
+| book, 300 req/s | 283 | 5,623 | 5.8% | 114% | 93% |
+| users, 2,000 | 539 | 3,192 | - | 195% | 103% |
+
+- **600 req/s is the highest rate tried that passed, not the limit.** The application used only about 110% of its 200%
+  there. At 800 req/s it used both cores while the database used about one of its two, but the later runs showed that
+  results depend on warm-up (below), so the limit for reads and mixed traffic was not established here. For a 70/30 mix
+  it was measured later, in [Requests open at once](#requests-open-at-once).
+- **Booking costs far more than reading.** At 400 req/s both the application and the database are busy. The real limit
+  for booking is **not established**, because it depends on how warm the JVM is (below). The 300 req/s step of this run
+  failed with a median of 12 ms and a p95 of 5.6 s.
+- **Booking capacity depends on warm-up.** A second run that went from the 60 s warm-up at 100 req/s straight to 200 req/s
+  failed there (p95 6.7 s, application at 204% CPU), with no error, slow statement, lock wait or long garbage collection
+  in the logs. Repeating the same step on one stack showed why:
+
+  | on one fresh stack, in this order | p95 | passed | application CPU |
+  |---|--:|---|---|
+  | warm-up, 100 req/s | 8.6 s | no | about 200% |
+  | 200 req/s, 1st time | 2.8 s | no | 220% falling to 81% |
+  | 200 req/s, 2nd to 5th time | 14-199 ms | yes | about 80% |
+  | 300 req/s | 2.2 s (median 11 ms) | no | about 110%, with a burst to 200% midway |
+
+  The likely reason is the JIT compiler, which competes with the requests for the same two cores; this was not verified
+  with compiler logs. A just-started instance carries less than half of the bookings it carries a few minutes later, so
+  warm it up before sending it a sale.
+- **About 1,000 users at this pace, not 2,000.** 1,000 users make about 500 req/s. Their p95 (239 ms) is far above that
+  of the mixed profile at 600 req/s (11 ms), probably because each level starts on a fresh JVM warmed with only 100
+  req/s: the application used both cores for roughly the first half minute of the measurement and about 1.25 afterwards.
+- **Overload slowed requests down but broke nothing.** No step had a failed request, and after the book profile, the mixed
+  profile and each users level, the tickets taken from the zone matched the tickets in live orders exactly.
+- A just-started JVM is much slower: without a warm-up, the first 10 s at 20 req/s had a p95 above 1 s, and the same
+  stack answered with a p95 of about 15 ms right after.
+
+**Caveats**
+- One laptop, one application instance, k6 next to it (it used at most about 1.5 cores of the 7 left over). Real
+  networks, TLS and a separate database host would change the numbers.
+- One run per cell; no medians. A step of 60 s is short for tail latency.
+- The data is small (50 events), and booking uses one zone, which is the worst case for the counter row.
+- Nothing was tuned. Pool size, JVM flags and CPU limits were not varied.
+
+## Requests open at once
+
+How many requests per second at most, and how many requests the application can have open at the same moment.
+
+```bash
+make load-test PROFILE=concurrency     # about 55 minutes; LEVELS, ROUNDS, LEVEL_SECONDS, BOOK_SHARE change the run
+```
+
+70% reads and 30% bookings (one standing ticket, all in one zone). Every client sends its next request as soon as the
+answer arrives, so the number of clients is the number of requests open. Each stack is first warmed up at 50 open
+requests until the rate settles (at most six minutes); each level is then measured for 60 s. Same stack and limits as
+above: application 2 CPU, PostgreSQL 2 CPU, pool 10, Tomcat defaults. **Good** = p95 under 500 ms and under 1% failed;
+**broken** = 1% or more failed (a request times out after 10 s).
+
+Two rounds on 2026-11-26, each on a new stack ([raw results](load-test-log.md), runs 11 and 12):
+
+| requests open | req/s, round 1 / 2 | p95 ms, round 1 / 2 | failed | mark |
+|--:|--:|--:|--:|---|
+| 10 | 588 / 506 | 63 / 65 | 0% | good |
+| 25 | 533 / 525 | 116 / 115 | 0% | good |
+| 50 | 519 / 531 | 295 / 295 | 0% | good |
+| **75** (held 180 s) | 514 / 486 | **479 / 495** | 0% | good |
+| 100 | 505 / 506 | 637 / 621 | 0% | slow |
+| 200 | 508 / 502 | 1,309 / 1,313 | 0% | slow |
+| 400 | 526 / 527 | 1,665 / 1,701 | 0% | slow |
+| 800 | 520 / 534 | 2,493 / 2,477 | 0% | slow |
+| 1,600 | 549 / 507 | 3,904 / 4,202 | 0% | slow |
+| 3,200 | 547 / 497 | 6,986 / 7,779 | 0% | slow |
+| 6,400 | - | 10,000 (timeout) | 99.7 / 99.8% | **broken** |
+
+- **At most about 500-590 requests per second**, usually 500-550. Beyond 25 open requests the rate no longer rises; more
+  open requests only wait longer.
+- **About 75 requests open at once with p95 under 500 ms.** There is no margin at that level (479 and 495 ms).
+- **No failed request up to 3,200 open**, but each then waits 6 s on average.
+- **Broken at 6,400**, where almost every request times out. This follows from Little's law (requests open = rate x time
+  each stays open): 6,400 / 530 per second is about 12 s, past the 10 s timeout. The edge would be near 5,000-5,500 open
+  requests; no level was measured between 3,200 and 6,400.
+- **Where the open requests are** (200 or more open): at most 200 have a Tomcat thread, the rest queue for one. Of those
+  200 only 10 hold a database connection; 185-190 wait for one, about 230 ms.
+- **What limits it:** the application used both its cores at every level, and the pool was all but full (about 9 of 10
+  connections busy on average, each held about 11 ms). PostgreSQL used 130-160% of its 200%. Neither the CPU limit nor the
+  pool size was changed, so which of the two to raise first is not known.
+- Stock stayed right: the tickets taken from the zone equalled the tickets in live orders after both rounds.
+
+**Caveats:** one laptop with k6 on it (k6 used about one of the seven threads left over); one hot zone, the worst case
+for booking; the 70/30 mix is an assumption; a closed model slows its own sending down when answers are slow, so it does
+not show what happens when requests keep arriving at a fixed rate beyond the limit.
+
+## Sale day: 30 minutes of people buying and bidding
+
+The load test above sends one kind of request at a fixed rate. This one lets simulated people behave like customers for
+half an hour (`loadtest/realistic.js`), on the same stack and limits, and then checks the data.
+
+```bash
+make sale-day                                   # 30 minutes; MINUTES, BASE, PEAK, BIDDERS change the load
+MINUTES=3 BASE=20 PEAK=40 BIDDERS=15 make sale-day    # a short rehearsal
+```
+
+- **Shoppers:** 300, rising to 1,000 within a minute when the sale of one hot concert (4,000 tickets) opens at minute 3,
+  back to 300 from minute 10. Each logs in with a password (later renews the token with the refresh cookie), browses,
+  and about half leave. The others pick seats or standing tickets and book; most pay, 15% walk away, 10% of payments are
+  declined and some of those are retried. Seconds of thinking between steps.
+- **Bidders:** 150 on 10 auctions that end one after another. They poll the auction and its leaderboard, bid up to a
+  budget (more eagerly in the last minute) and pay what they win, except 30% who let the right pass to the next bidder.
+- **VNPAY** is played by the script: it signs each callback with a secret that exists only in this stack and calls the
+  IPN, 5% of them twice. Nothing calls VNPAY. The limits per IP address (login, IPN, return) are raised, because every
+  simulated person comes from one address.
+- The application has just started: there is no warm-up.
+
+### Result (2026-11-25, commit `6dd5be7`, one run)
+
+259,006 requests. CPU: 200% = both cores of the application busy.
+
+| phase | minutes | req/s | p95 ms | failed | app CPU |
+|---|--:|--:|--:|--:|--:|
+| just started, people arriving, all bidders at once at second 30 | 0 | 38 | 6,652 | 1.79% | 119% |
+| waiting for the sale | 1-2 | 97-105 | 15-18 | 0% | 49-86% |
+| the sale opens, 700 more people within a minute | 3 | 173 | 380 | 0% | 134% |
+| the rush | 4-9 | 209-231 | 12-24 | 0% | 51-103% |
+| the long tail | 11-27 | 101-200 | 7-14 | 0% | 27-50% |
+
+- **The only failures were in the first minute:** 41 requests (39 logins, 1 booking, 1 payment start) timed out after
+  10 s, all within three seconds of each other, about 10 s after the 150 bidders logged in at the same instant on a
+  just-started JVM (BCrypt plus compilation on two cores). Nothing else answered with an unexpected status in the other
+  29 minutes. A real crowd does not arrive in one instant, but a restart shortly before a sale would hurt.
+- Over the whole run every endpoint except login had a p95 of 39 ms or less.
+- **Memory did not grow** (application 613-647 MB). 942 garbage collections took 5.4 s in total, the longest 41 ms. No
+  restart, no ERROR in the application log, no deadlock, no lock wait or statement over 1 s in the database log.
+- **What happened:** 7,562 bookings, 5,925 paid orders, 616 declined payments, 345 repeated callbacks answered "already
+  confirmed", 956 attempts at a seat somebody else got first, 1,173 orders cancelled by the job after nobody paid.
+  2,017 bids accepted, 505 outbid, 35 too late. All 10 auctions closed: 5 were paid; 2 unpaid offers expired and passed
+  to the next bidder.
+- **All 15 data checks found nothing**, among them: no seat with two tickets, every standing counter equal to its orders
+  and auctions, every paid order with its tickets and exactly one successful payment, no bid below the previous one plus
+  the increment, no stored callback left unprocessed.
+- **The limit was not reached.** The peak was 231 req/s, with CPU to spare after the opening minute.
+- **A limit to watch in production:** the IPN route allows 20 callbacks per second per address (burst 100), raised here.
+  VNPAY calls from few addresses, and this run already reached roughly 11-13 callbacks per second in the rush.
+
+**Caveats:** one run on one laptop with k6 next to the application; the behaviour (think times, shares who buy, walk away
+or pay) is assumed, not taken from real traffic; once the hot concert sold out, most later traffic was browsing, other
+events and auctions.
