@@ -46,7 +46,7 @@ seat-hold or payment flow).
 > SEATED zone's seats in bulk) and `POST /events/{id}/publish` (ORGANIZER, owner only, DRAFT to PUBLISHED, needs a
 > zone), `GET /admin/events/{id}/tickets` (ADMIN). Any logged-in user can read `GET /venues/{publicId}` and
 > `GET /events?page=&size=` (published events that have not started, soonest first); both are cached in Redis with
-> a short TTL, and publishing evicts the event pages. Only CUSTOMERs can register, so ADMIN/ORGANIZER users must be
+> a short TTL (so is the venue list), and publishing evicts the event pages. Only CUSTOMERs can register, so ADMIN/ORGANIZER users must be
 > inserted by SQL for now.
 > Reading for buyers: `GET /events/{id}` (event with zones and what is left in each) and
 > `GET /events/{id}/zones/{zoneId}/seats` (seat map; a draft is visible to its organizer only, 404 for others; neither is
@@ -55,7 +55,8 @@ seat-hold or payment flow).
 > title and description; evicts the event pages); `DELETE /events/{id}` and `PUT`/`DELETE /events/{id}/zones/{zoneId}`
 > (drafts only, refused once there are orders; a standing zone never shrinks below what is taken). Creating, changing and
 > removing zones, deleting and publishing lock the event row (`findByPublicIdForUpdate`). `GET /venues` (logged in),
-> `PUT`/`DELETE /venues/{id}` (ADMIN; `VENUE_IN_USE` while an event uses it; both evict `CacheConfig.VENUES`).
+> `PUT`/`DELETE /venues/{id}` (ADMIN; `VENUE_IN_USE` while an event uses it; both evict `CacheConfig.VENUES`;
+> every venue write, `POST /venues` included, evicts the list pages in `CacheConfig.VENUE_PAGES`).
 > `GET /auctions/{id}`, `GET /auctions/{id}/bids` (history with bidder names), and `POST /auctions/{id}/cancel`
 > (ORGANIZER, owner; only SCHEDULED or LIVE without bids, one conditional UPDATE, ticket back on sale).
 > `POST /api/v1/auctions` (ORGANIZER, owner of a PUBLISHED event) creates a SCHEDULED auction for
@@ -84,7 +85,8 @@ seat-hold or payment flow).
 > Not started: cancelling an event, enforcing `max_tickets_per_user`, ticket check-in, and querying VNPAY for payments left
 > PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
 > logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (a future cancel) must evict
-> `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES`.
+> `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES` and `CacheConfig.VENUE_PAGES`
+> (adding one: only `VENUE_PAGES`).
 
 **Entity mapping conventions**
 - `BaseEntity` (id + `created_at`) / `AuditableEntity` (+ `updated_at`) in `common/domain`.
