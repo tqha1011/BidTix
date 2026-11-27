@@ -5,9 +5,13 @@
 #   loadtest/run.sh [smoke|read|book|mixed|users|all]      (default: all; needs Docker, k6, openssl, jq, curl)
 #   loadtest/run.sh concurrency      highest request rate and most requests open at once, 70% reads and 30% bookings;
 #       knobs: LEVELS="10 25 ..." ROUNDS LEVEL_SECONDS BOOK_SHARE WARM_MIN WARM_MAX
+#       SEATED_SHARE=0.5 makes half of the bookings take a numbered seat (default 0: standing tickets only);
+#       HOT_SEATS is the size of the hall they come from (600000 when SEATED_SHARE is set; setting it alone seeds the
+#       hall without using it, to compare on the same data)
 #
 # Knobs (environment): RATES="100 200 ..." USER_LEVELS="1000 2000 ..." WARMUP STEP CONFIRM RAMP (seconds),
 # POOL (database connections) APP_CPUS DB_CPUS, KEEP=1 leaves the stack running afterwards.
+#   VIRTUAL_THREADS=true handles requests on virtual threads; JAVA_EXTRA adds options to the application's JVM.
 #   APP_REPLICAS=2 runs that many instances behind nginx (compose.scale.yaml, PROXY_CPUS); each has APP_CPUS and its own
 #   pool. Without it there is one instance and nothing in front of it.
 set -euo pipefail
@@ -32,6 +36,10 @@ COOLDOWN=${COOLDOWN:-15}
 # stop a run rather than let the load generator push the machine into swap
 MIN_FREE_MB=${MIN_FREE_MB:-1500}
 HOT_ZONE=00000000-0000-4000-a000-000000000001
+HALL_EVENT=00000000-0000-4000-9000-000000000051
+SEATED_SHARE=${SEATED_SHARE:-0}
+HOT_SEATS=${HOT_SEATS:-$(awk -v s="$SEATED_SHARE" 'BEGIN {print (s > 0 ? 600000 : 0)}')}
+KIND_ROWS=
 BASE_URL=
 K6_PID=
 export K6_NO_USAGE_REPORT=true
@@ -111,7 +119,15 @@ reset_stack() {
         BASE_URL=http://$(container_ip "$(compose ps -q proxy)"):8080
         wait_for "$BASE_URL"
     fi
-    query -q -v users="$USERS" -f - <loadtest/seed.sql >/dev/null
+    query -q -v users="$USERS" -v hot_seats="$HOT_SEATS" -f - <loadtest/seed.sql >/dev/null
+}
+
+# the first seat of the hall after every seat that an earlier run on this database has touched
+seat_base() {
+    if ((!HOT_SEATS)); then echo 0; return; fi
+    query -c "select coalesce(max(s.id) filter (where s.version > 0) - min(s.id) + 1, 0)
+              from seats s join ticket_zones z on z.id = s.zone_id join events e on e.id = z.event_id
+              where e.public_id = '$HALL_EVENT'"
 }
 
 # run_k6 <result.json> <seconds to leave out of the CPU figures> <NAME=value>...
@@ -248,6 +264,31 @@ check_stock() {
     [[ -n $taken && $taken == "$ordered" ]] || die "STOCK MISMATCH: $taken taken from the zone, $ordered in orders"
     record ""
     record "Stock check: $taken tickets taken from the hot zone, $ordered in orders."
+    if ((HOT_SEATS)); then check_seats; fi
+}
+
+# every held seat of the hall belongs to exactly one live order, and the other way round
+check_seats() {
+    local held ordered wrong used
+    read -r held ordered wrong <<<"$(query -c "
+        with hall as (select z.id from ticket_zones z join events e on e.id = z.event_id
+                      where e.public_id = '$HALL_EVENT'),
+             live as (select i.seat_id, o.id as order_id
+                      from order_items i join orders o on o.id = i.order_id
+                      where i.zone_id in (select id from hall) and o.status <> 'CANCELLED')
+        select (select count(*) from seats where zone_id in (select id from hall) and status = 'HELD'),
+               (select count(*) from live),
+               (select count(*) from live l join seats s on s.id = l.seat_id
+                where s.held_by_order_id is distinct from l.order_id)")"
+    [[ -n $held && $held == "$ordered" && $wrong == 0 ]] ||
+        die "SEAT MISMATCH: $held seats held, $ordered in orders, $wrong not held by their order"
+    used=$(seat_base)
+    ((used < HOT_SEATS)) || die "the hall ran out of seats: raise HOT_SEATS"
+    # a handful comes from the script's own queries; many more means that requests are reading the whole table
+    local scans
+    scans=$(query -c "select seq_scan from pg_stat_user_tables where relname = 'seats'")
+    record "Scans of the whole seat table since the database was created: $scans."
+    record "Seat check: $held seats of the hall held, $ordered in orders, $wrong not held by their order; seats used up to number $used of $HOT_SEATS."
 }
 
 # Highest request rate one profile carries: climb until a step fails, try the middle, then hold the best for longer.
@@ -336,7 +377,7 @@ level() {
     LEVEL_FILE=
     sleep "$COOLDOWN"
     run_k6 "$summary" 10 MODE=concurrency PROFILE=mixed BOOK_SHARE="$BOOK_SHARE" CONCURRENCY="$clients" \
-        RAMP=10 DURATION="$seconds" || status=$?
+        SEATED_SHARE="$SEATED_SHARE" SEAT_BASE="$(seat_base)" RAMP=10 DURATION="$seconds" || status=$?
     if ((status == 2)) || [[ ! -s $summary ]]; then
         record "| $label | $clients | no result: $( ((status == 2)) && echo "the load generator ran short of memory" || echo "k6 failed, see ${summary%.json}.log") |"
         return 1
@@ -349,6 +390,7 @@ level() {
         "\(.readP95 | round) | \(.bookP95 | round) | \(.failed | pct) | \(.timeouts) | \(.open | round) | " +
         "\(if .pass then "good" elif .broken then "**broken**" else "slow" end) |"' "$summary")"
     SERVER_ROWS+="| $label | $clients | $(server_figures "$stats") | $(cpu_of "$stats" app) | $(cpu_of "$stats" database) | $(cpu_of "$stats" cache) | $(cpu_of "$stats" proxy) | $(awk '$1 == "k6" {cpu = $2} END {printf "%.0f%%", cpu}' "$stats") | $(awk '$1 == "k6" && $3 > max {max = $3} END {printf "%.0f MB", max / 1024}' "$stats") |"$'\n'
+    KIND_ROWS+="$(jq -r --arg label "$label" '"| \($label) | \(.target) | \(.seatBookings) | \(.seatP95 | round) | \(.standingBookings) | \(.standingP95 | round) |"' "$summary")"$'\n'
     jq -e .pass "$summary" >/dev/null
 }
 
@@ -358,7 +400,8 @@ warm_until_steady() {
     for round in $(seq "$WARM_MAX"); do
         say "warm-up $round: $WARM_CLIENTS requests at once"
         run_k6 "$OUT/runs/warmup.json" 0 MODE=concurrency PROFILE=mixed BOOK_SHARE="$BOOK_SHARE" \
-            CONCURRENCY="$WARM_CLIENTS" RAMP=5 DURATION="$LEVEL_SECONDS" || true
+            SEATED_SHARE="$SEATED_SHARE" SEAT_BASE="$(seat_base)" CONCURRENCY="$WARM_CLIENTS" RAMP=5 \
+            DURATION="$LEVEL_SECONDS" || true
         rate=$(jq '.rps | round' "$OUT/runs/warmup.json")
         rates+=("$rate")
         if ((round >= WARM_MIN && previous > 0)) &&
@@ -378,6 +421,7 @@ concurrency_round() {
     record ""
     warm_until_steady
     SERVER_ROWS=
+    KIND_ROWS=
     record ""
     record "| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |"
     record "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|"
@@ -412,6 +456,14 @@ concurrency_round() {
     record "| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |"
     record "|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|"
     record "${SERVER_ROWS%$'\n'}"
+    if ((HOT_SEATS)); then
+        record ""
+        record "Bookings by kind (counts and p95 of the measured part)."
+        record ""
+        record "| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |"
+        record "|---|--:|--:|--:|--:|--:|"
+        record "${KIND_ROWS%$'\n'}"
+    fi
     check_stock
     record ""
     record "Requests answered by each instance since it started: $(requests_per_instance)."
@@ -431,6 +483,9 @@ concurrency_round() {
 concurrency() {
     record "- Traffic: $(awk -v b="$BOOK_SHARE" 'BEGIN {printf "%.0f%% reads, %.0f%% bookings", (1 - b) * 100, b * 100}'); every client sends its next request when the answer arrives; levels: $LEVELS; ${LEVEL_SECONDS}s each after 10s of arriving"
     record "- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)"
+    if ((HOT_SEATS)); then
+        record "- Bookings: $(awk -v s="$SEATED_SHARE" 'BEGIN {printf "%.0f%% take one numbered seat, %.0f%% one standing ticket", s * 100, (1 - s) * 100}'); a hall of $HOT_SEATS seats is seeded"
+    fi
     for ((ROUND = 1; ROUND <= ROUNDS; ROUND++)); do
         concurrency_round
     done
@@ -464,6 +519,8 @@ case $what in
     concurrency) COMPOSE_EXTRA=loadtest/compose.metrics.yaml ;;
     *) die "usage: loadtest/run.sh [smoke|read|book|mixed|users|concurrency|all]" ;;
 esac
+[[ $what == concurrency ]] || ((!HOT_SEATS)) || die "SEATED_SHARE and HOT_SEATS work with the concurrency profile only"
+[[ $what == concurrency || $SEATED_SHARE == 0 ]] || die "SEATED_SHARE works with the concurrency profile only"
 for tool in docker k6 openssl jq curl basenc; do
     command -v "$tool" >/dev/null || die "$tool is not installed"
 done
@@ -477,7 +534,7 @@ others=$(docker ps --format '{{.Label "com.docker.compose.project"}} {{.Names}}'
 record "# Load test, $(date '+%Y-%m-%d %H:%M')"
 record ""
 record "- Commit $(git rev-parse --short HEAD)$([[ -n $(git status --porcelain -- src pom.xml) ]] && echo ' with uncommitted changes in src or pom.xml')"
-record "- $(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo), $(nproc) threads; ${APP_REPLICAS:-1} x app ${APP_CPUS:-2} CPU / 2 GB$([[ -n $APP_REPLICAS ]] && echo " behind nginx ${PROXY_CPUS:-1} CPU"), PostgreSQL ${DB_CPUS:-2} CPU / 1 GB, Redis 1 CPU; pool ${POOL:-10}"
+record "- $(awk -F': ' '/model name/ {print $2; exit}' /proc/cpuinfo), $(nproc) threads; ${APP_REPLICAS:-1} x app ${APP_CPUS:-2} CPU / 2 GB$([[ -n $APP_REPLICAS ]] && echo " behind nginx ${PROXY_CPUS:-1} CPU"), PostgreSQL ${DB_CPUS:-2} CPU / 1 GB, Redis 1 CPU; pool ${POOL:-10}; virtual threads ${VIRTUAL_THREADS:-false}${JAVA_EXTRA:+; JVM $JAVA_EXTRA}"
 record "- $(k6 version | head -1 | awk '{print $1, $2}') on the same machine$([[ $what == concurrency ]] || echo '; pass = p95 < 500 ms, failed < 1%, dropped < 1%')"
 record "- Other containers running during the test: ${others:-none}"
 

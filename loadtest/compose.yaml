@@ -48,8 +48,10 @@ services:
       # throwaway keys made by tokens.sh, so that it can sign the users' access tokens itself
       - ../target/loadtest/keys:/keys:ro
     environment:
-      # one line per garbage collection in the container log
-      JAVA_TOOL_OPTIONS: -Xlog:gc
+      # one line per garbage collection in the container log; JAVA_EXTRA adds JVM options to a run
+      JAVA_TOOL_OPTIONS: -Xlog:gc ${JAVA_EXTRA:-}
+      # VIRTUAL_THREADS=true loadtest/run.sh ... handles requests on virtual threads (the application's default is off)
+      SPRING_THREADS_VIRTUAL_ENABLED: ${VIRTUAL_THREADS:-false}
       JWT_PUBLIC_KEY: file:/keys/public.pem
       JWT_PRIVATE_KEY: file:/keys/private.pem
       SPRING_DATASOURCE_URL: jdbc:postgresql://database:5432/bidtix
