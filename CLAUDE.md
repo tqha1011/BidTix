@@ -85,7 +85,12 @@ seat-hold or payment flow).
 > `POST /api/v1/events/{id}/cancel` (ORGANIZER, owner; only PUBLISHED and starting more than 3 days
 > from now, one conditional UPDATE) cancels
 > an event; what was sold is undone by two jobs (see **Event cancellation**).
-> Not started: enforcing `max_tickets_per_user`, ticket check-in, and querying VNPAY for payments left
+> `POST /api/v1/events/{id}/check-ins` (ORGANIZER, owner, body `{ticketPublicId}`, `CheckInService`) admits a ticket: one
+> conditional UPDATE VALID to USED whose row count decides, so one QR code admits once. Only while the event is PUBLISHED,
+> from 2 hours before it starts until it ends (`CHECK_IN_NOT_OPEN`). A ticket of another event is `TICKET_NOT_FOUND`;
+> `TICKET_ALREADY_USED` carries `usedAt`. Keep the 2 hours shorter than the 3 days' cancellation notice, so no ticket is
+> USED when an event is cancelled. Rate limit policy `check-in`.
+> Not started: enforcing `max_tickets_per_user` and querying VNPAY for payments left
 > PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
 > logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (publish, update and cancel do) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES` and `CacheConfig.VENUE_PAGES`
@@ -353,7 +358,8 @@ JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `
   A policy is `fixed-window` (`limit`, `window`) or `token-bucket` (`capacity`, `refill-tokens`, `refill-every`; the
   refill is worked out when a request arrives, there is no background job), plus `fail-open`. Today: login and
   register are fixed windows per IP, `default-user` is a bucket of 15 tokens refilled by 3 every 10 s, `vnpay-ipn` is a wide
-  fail-open bucket per IP (100, refilled by 20 every second). `RateLimitInterceptor` runs after Spring Security, on `/api/**`: a controller
+  fail-open bucket per IP (100, refilled by 20 every second), `check-in` is a
+  fail-open bucket per organizer (60, refilled by 10 every second). `RateLimitInterceptor` runs after Spring Security, on `/api/**`: a controller
   method or class with `@RateLimited(policy = ..., by = IP|USER)` uses that policy; otherwise a logged-in caller gets
   `default-user`. Too many requests: 429 `TOO_MANY_REQUESTS` with `Retry-After`; Redis unreachable: fail-open policies
   let the request through, fail-closed ones answer 503 `RATE_LIMITER_UNAVAILABLE` (keep login and register fail-closed).
