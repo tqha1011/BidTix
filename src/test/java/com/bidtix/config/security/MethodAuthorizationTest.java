@@ -1,5 +1,7 @@
 package com.bidtix.config.security;
 
+import com.bidtix.booking.service.CheckInService;
+import com.bidtix.booking.controller.CheckInController;
 import com.bidtix.auction.controller.AuctionController;
 import com.bidtix.auction.controller.BidController;
 import com.bidtix.auction.controller.LeaderboardController;
@@ -97,6 +99,7 @@ class MethodAuthorizationTest {
     @Autowired PaymentService paymentService;
     @Autowired JwtDecoder jwtDecoder;
     @Autowired EventService eventService;
+    @Autowired CheckInService checkInService;
 
     MockMvc mvc;
 
@@ -435,6 +438,29 @@ class MethodAuthorizationTest {
         }
     }
 
+    // ---- POST /events/{id}/check-ins: ORGANIZER only ------------------------------------------
+
+    @Test
+    void checkIn_organizer_isAllowed_andServiceGetsTheTokenSubject() throws Exception {
+        UUID eventId = UUID.randomUUID();
+        UUID ticketId = UUID.randomUUID();
+
+        mvc.perform(json(post("/api/v1/events/" + eventId + "/check-ins"), "ORGANIZER",
+                        "{\"ticketPublicId\":\"" + ticketId + "\"}"))
+                .andExpect(status().isOk());
+
+        verify(checkInService).checkIn(eq(USER_ID), eq(eventId), eq(ticketId));
+    }
+
+    @Test
+    void checkIn_adminAndCustomer_areForbidden() throws Exception {
+        for (String role : List.of("ADMIN", "CUSTOMER")) {
+            mvc.perform(json(post("/api/v1/events/" + UUID.randomUUID() + "/check-ins"), role,
+                            "{\"ticketPublicId\":\"" + UUID.randomUUID() + "\"}"))
+                    .andExpect(forbidden());
+        }
+    }
+
     // ---- GET /events and GET /venues/{id}: any logged-in user ---------------------------------
 
     @Test
@@ -512,7 +538,8 @@ class MethodAuthorizationTest {
     @EnableWebMvc
     @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class, RestAccessDeniedHandler.class,
             GlobalExceptionHandler.class, VenueController.class, EventController.class,
-            AdminTicketController.class, AuctionController.class, BidController.class, LeaderboardController.class, OrderController.class, PaymentController.class})
+            AdminTicketController.class, AuctionController.class, BidController.class, LeaderboardController.class, OrderController.class, PaymentController.class,
+            CheckInController.class})
     static class TestConfig {
         @Bean JwtDecoder jwtDecoder() { return mock(JwtDecoder.class); }
         @Bean VenueService venueService() { return mock(VenueService.class); }
@@ -525,5 +552,6 @@ class MethodAuthorizationTest {
         @Bean BookingService bookingService() { return mock(BookingService.class); }
         @Bean PaymentService paymentService() { return mock(PaymentService.class); }
         @Bean MyOrderService myOrderService() { return mock(MyOrderService.class); }
+        @Bean CheckInService checkInService() { return mock(CheckInService.class); }
     }
 }

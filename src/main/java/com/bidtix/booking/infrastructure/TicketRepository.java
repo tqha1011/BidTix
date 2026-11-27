@@ -64,16 +64,17 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
             countQuery = "select count(t) from Ticket t join User u on u.id = t.ownerId where u.publicId = :ownerPublicId")
     Page<MyTicketResponse> findTicketsOfOwner(UUID ownerPublicId, Pageable pageable);
 
-
+    /** VALID -&gt; USED for one ticket of this event. The caller MUST check the row count: 1 means it was admitted. */
     @Modifying
     @Query("update Ticket t " +
             "set t.status = TicketStatus.USED, t.usedAt = :now, t.updatedAt = :now " +
             "where t.publicId = :ticketPublicId and t.status = TicketStatus.VALID and t.eventId = :eventId")
-    int checkInTicket(@Param("ticketPublicId") UUID ticketPublicId,@Param("eventId") Long eventId ,@Param("now") Instant now);
+    int checkInTicket(@Param("ticketPublicId") UUID ticketPublicId, @Param("eventId") Long eventId,
+                      @Param("now") Instant now);
 
+    Optional<Ticket> findByPublicIdAndEventId(UUID publicId, Long eventId);
 
-    Optional<Ticket> findByPublicId(UUID publicId);
-
+    /** What the gate sees. The seat is a LEFT join because a general-admission ticket has none. */
     @Query("select new com.bidtix.booking.dtos.CheckInResponse(t.publicId, e.title, z.name, s.rowLabel, s.seatNumber, " +
             "u.fullName, o.orderCode, t.usedAt) " +
             "from Ticket t " +

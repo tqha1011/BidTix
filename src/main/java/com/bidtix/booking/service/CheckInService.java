@@ -1,5 +1,7 @@
 package com.bidtix.booking.service;
 
+import com.bidtix.booking.domain.Ticket;
+import com.bidtix.booking.domain.TicketStatus;
 import com.bidtix.booking.dtos.CheckInResponse;
 import com.bidtix.booking.infrastructure.TicketRepository;
 import com.bidtix.config.exceptions.BusinessException;
@@ -15,21 +17,21 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
+import java.util.Map;
 import java.util.UUID;
 
 /**
  * Admits a ticket at the gate: VALID -&gt; USED, exactly once, however many scanners read the same QR code at the same
- * moment.
- * <p>
- * Skeleton: it does nothing yet.
+ * moment: one conditional UPDATE decides, and its row count is checked.
  */
 @Service
 @RequiredArgsConstructor
 public class CheckInService {
 
     /**
-     * How long before the event starts the gate opens. A placeholder: decide the real value. Keep it shorter than the
-     * 3 days' notice of {@code EventService.cancel}: that is why no ticket can be USED when an event is cancelled.
+     * How long before the event starts the gate opens; it closes when the event ends. Keep it shorter than the 3 days'
+     * notice of {@code EventService.cancel}: that is why no ticket can be USED when an event is cancelled.
      */
     static final Duration OPENS_BEFORE_START = Duration.ofHours(2);
 
@@ -38,45 +40,43 @@ public class CheckInService {
     private final UserRepository userRepository;
     private final Clock clock;
 
+    /**
+     * Admits one ticket of this event. Only the event's organizer, only while the event is PUBLISHED and its gate is open.
+     * A ticket of another event is "not found", whatever its state, so nothing is told about it.
+     */
     @Transactional
     public CheckInResponse checkIn(UUID organizerPublicId, UUID eventPublicId, UUID ticketPublicId) {
-        // TODO 1. the event: EVENT_NOTFOUND if unknown, FORBIDDEN if the caller is not its organizer
-        // TODO 2. it must be PUBLISHED, and now within [startsAt - OPENS_BEFORE_START, endsAt]: CHECK_IN_NOT_OPEN
-        // TODO 3. ONE conditional UPDATE in TicketRepository: USED, used_at and updated_at = now, where the ticket's
-        //         public id and event id match and status = VALID. The row count decides; never check in Java first.
-        //         (ck_tickets_used_at: used_at must be set exactly when the status is USED)
-        // TODO 4. 1 row: return the response (one query that joins event, zone, seat, owner and order, like
-        //         AdminTicketResponse)
-        // TODO 5. 0 rows: read the ticket to say why. Unknown or of another event: TICKET_NOT_FOUND;
-        //         USED: TICKET_ALREADY_USED with usedAt as an extra field; CANCELLED: TICKET_CANCELLED
         Event event = eventRepository.findByPublicId(eventPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
-
         User user = userRepository.findByPublicId(organizerPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
-
-        if(!event.getOrganizerId().equals(user.getId())){
+        if (!event.getOrganizerId().equals(user.getId())) {
             throw new BusinessException(ErrorCode.FORBIDDEN);
         }
 
-        if(event.getStatus() != EventStatus.PUBLISHED ||
-                clock.instant().isBefore(event.getStartsAt().minus(OPENS_BEFORE_START)) || clock.instant().isAfter(event.getEndsAt())){
+        Instant now = clock.instant();
+        if (event.getStatus() != EventStatus.PUBLISHED
+                || now.isBefore(event.getStartsAt().minus(OPENS_BEFORE_START)) || now.isAfter(event.getEndsAt())) {
             throw new BusinessException(ErrorCode.CHECK_IN_NOT_OPEN);
         }
 
-        var checkInCount = ticketRepository.checkInTicket(ticketPublicId, event.getId(), clock.instant());
-        if(checkInCount == 0){
-            var ticket = ticketRepository.findByPublicId(ticketPublicId)
-                    .orElseThrow(() -> new BusinessException(ErrorCode.TICKET_NOT_FOUND));
-
-            if(ticket.getStatus() == com.bidtix.booking.domain.TicketStatus.USED){
-                throw new BusinessException(ErrorCode.TICKET_ALREADY_USED, "Ticket already used at " + ticket.getUsedAt());
-            } else if(ticket.getStatus() == com.bidtix.booking.domain.TicketStatus.CANCELLED){
-                throw new BusinessException(ErrorCode.TICKET_CANCELLED);
-            } else {
-                throw new BusinessException(ErrorCode.TICKET_NOT_VALID);
-            }
+        if (ticketRepository.checkInTicket(ticketPublicId, event.getId(), now) != 1) {
+            throw refusal(ticketPublicId, event.getId());
         }
         return ticketRepository.checkInTicketResponse(ticketPublicId, event.getId());
+    }
+
+    /** Why the UPDATE changed nothing. A ticket never becomes VALID again, so the answer cannot be outdated. */
+    private BusinessException refusal(UUID ticketPublicId, Long eventId) {
+        Ticket ticket = ticketRepository.findByPublicIdAndEventId(ticketPublicId, eventId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.TICKET_NOT_FOUND));
+        if (ticket.getStatus() == TicketStatus.USED) {
+            return new BusinessException(ErrorCode.TICKET_ALREADY_USED, "The ticket was already used",
+                    Map.of("usedAt", ticket.getUsedAt()));
+        }
+        if (ticket.getStatus() == TicketStatus.CANCELLED) {
+            return new BusinessException(ErrorCode.TICKET_CANCELLED);
+        }
+        throw new IllegalStateException("Valid ticket " + ticketPublicId + " could not be checked in");
     }
 }

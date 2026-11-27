@@ -48,7 +48,6 @@ public enum ErrorCode {
     TICKET_ALREADY_USED(HttpStatus.CONFLICT, "The ticket was already used"),
     TICKET_CANCELLED(HttpStatus.CONFLICT, "The ticket was cancelled"),
     CHECK_IN_NOT_OPEN(HttpStatus.CONFLICT, "Check-in is not open for this event"),
-    TICKET_NOT_VALID(HttpStatus.BAD_REQUEST, "The ticket is not valid for this event"),
 
     // --- event ---
     VENUE_NOTFOUND(HttpStatus.NOT_FOUND, "Venue not found"),
