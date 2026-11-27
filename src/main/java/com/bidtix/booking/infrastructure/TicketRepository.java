@@ -3,6 +3,7 @@ package com.bidtix.booking.infrastructure;
 import com.bidtix.booking.domain.Ticket;
 import com.bidtix.booking.domain.TicketStatus;
 import com.bidtix.booking.dtos.AdminTicketResponse;
+import com.bidtix.booking.dtos.CheckInResponse;
 import com.bidtix.booking.dtos.MyTicketResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
@@ -13,6 +14,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.Optional;
 import java.util.UUID;
 
 public interface TicketRepository extends JpaRepository<Ticket, Long> {
@@ -61,4 +63,26 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
             """,
             countQuery = "select count(t) from Ticket t join User u on u.id = t.ownerId where u.publicId = :ownerPublicId")
     Page<MyTicketResponse> findTicketsOfOwner(UUID ownerPublicId, Pageable pageable);
+
+    /** VALID -&gt; USED for one ticket of this event. The caller MUST check the row count: 1 means it was admitted. */
+    @Modifying
+    @Query("update Ticket t " +
+            "set t.status = TicketStatus.USED, t.usedAt = :now, t.updatedAt = :now " +
+            "where t.publicId = :ticketPublicId and t.status = TicketStatus.VALID and t.eventId = :eventId")
+    int checkInTicket(@Param("ticketPublicId") UUID ticketPublicId, @Param("eventId") Long eventId,
+                      @Param("now") Instant now);
+
+    Optional<Ticket> findByPublicIdAndEventId(UUID publicId, Long eventId);
+
+    /** What the gate sees. The seat is a LEFT join because a general-admission ticket has none. */
+    @Query("select new com.bidtix.booking.dtos.CheckInResponse(t.publicId, e.title, z.name, s.rowLabel, s.seatNumber, " +
+            "u.fullName, o.orderCode, t.usedAt) " +
+            "from Ticket t " +
+            "join Event e on e.id = t.eventId " +
+            "join TicketZone z on z.id = t.zoneId " +
+            "left join Seat s on s.id = t.seatId " +
+            "join User u on u.id = t.ownerId " +
+            "join Order o on o.id = t.order.id " +
+            "where t.publicId = :ticketPublicId and t.eventId = :eventId")
+    CheckInResponse checkInTicketResponse(UUID ticketPublicId, Long eventId);
 }

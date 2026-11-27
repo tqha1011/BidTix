@@ -40,14 +40,14 @@ The facts about this project in one place, for a portfolio, a CV or a quick revi
 | **Period** | Started November 2026, still in progress |
 | **Stack** | Java 21, Spring Boot 4 (Web MVC, Data JPA, Security), PostgreSQL, Flyway, Redis, VNPAY, JUnit 5, Testcontainers, k6, Docker, GitHub Actions |
 | **Architecture** | Modular monolith, package-by-feature, layered inside each module |
-| **Evidence** | 523 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
+| **Evidence** | 541 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
 
 **The problem.** When a popular concert goes on sale, thousands of requests compete for the same seats within seconds,
 clients retry, payment results arrive late or twice, and unpaid orders must give their stock back. Each of these can
 sell a ticket twice, lose money or lock inventory for good.
 
 **What was built.** Registration and login with rotating refresh tokens, venue and event management, booking of seated
-and standing tickets, English auctions with anti-sniping and second-chance offers, VNPAY payments and a refund job, event cancellation with refunds,
+and standing tickets, English auctions with anti-sniping and second-chance offers, VNPAY payments and a refund job, event cancellation with refunds, ticket check-in,
 all on one PostgreSQL database with Redis used only where losing it cannot break correctness.
 
 **Highlights**
@@ -76,8 +76,8 @@ payment gateway integration, caching and rate limiting with Redis, JWT authentic
 testing, benchmarking and load testing, writing architecture decision records.
 
 **Scope of these claims.** Payments run against VNPAY's sandbox only, and refunds are not proven there yet. All
-performance figures come from simulated traffic on one laptop. There is no web or mobile client. The per-user ticket limit
-and ticket check-in are not built. See [Limitations and roadmap](#limitations-and-roadmap).
+performance figures come from simulated traffic on one laptop. There is no web or mobile client. The per-user ticket limit is
+not built. See [Limitations and roadmap](#limitations-and-roadmap).
 
 **Quoting the performance figures** (for a portfolio or a CV):
 
@@ -270,7 +270,7 @@ paid in time.
 
 ### Cancelling an event
 
-The request only changes the event's status. The jobs look for cancelled events and undo what was sold, so a crash or a
+An organizer can cancel only more than 3 days before the start. The request only changes the event's status. The jobs look for cancelled events and undo what was sold, so a crash or a
 request that was still running is picked up by a later run.
 
 ```mermaid
@@ -350,6 +350,7 @@ stateDiagram-v2
 | Most requests lose once an event sells out | Redis flag that can only refuse, never grant; fails open ([ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md)) | Benchmarked on and off |
 | Unpaid orders keep stock locked | Batched cancellation with `SKIP LOCKED`; a failing batch is retried order by order | Several jobs at once give each order back once |
 | An event is called off after tickets were sold | One status change, then jobs that look for cancelled events; one transaction per paid order; an event is marked done only after a settle window | Several jobs at once refund each order once |
+| Two gates scan the same QR code | One conditional `UPDATE` from `VALID` to `USED`; the row count decides who gets in | 10 scans at once: one admitted |
 | Many requests miss the cache together | Cache-aside with TTLs, evicted on write, with a locking cache writer | 16 simultaneous misses: one database load |
 | Stolen refresh token | Rotation with reuse detection; only token hashes are stored | Reuse revokes all of that user's sessions |
 | Abuse and floods | Redis rate limits: fixed window for login and registration (fail-closed), token bucket per user | Parallel requests: exactly the limit gets through |
@@ -512,11 +513,12 @@ Done:
 - [x] Idempotency keys, Redis cache, rate limits, booking gate
 - [x] Concurrency tests, benchmarks and load tests
 - [x] Cancelling an event: auctions called off, orders cancelled, payments marked for refund
+- [x] Ticket check-in at the gate
 
 Next:
 
 - [ ] Refunds proven on the VNPAY sandbox
-- [ ] Per-user ticket limit and ticket check-in
+- [ ] Per-user ticket limit
 - [ ] Observability: a secured Prometheus endpoint
 
 ## Documentation

@@ -102,3 +102,6 @@ bidtix:
       vnpay-ipn:     { algorithm: token-bucket, capacity: 100, refill-tokens: 20, refill-every: 1s, fail-open: true }
       # the page a customer's browser comes back to, per IP: it only reads
       vnpay-return:  { algorithm: token-bucket, capacity: 20, refill-tokens: 5, refill-every: 1s, fail-open: true }
+      # a gate scanning tickets, per organizer (all their scanners share it). Fail-open: the conditional UPDATE is what
+      # stops a ticket being used twice, and the gate must keep working while Redis is down.
+      check-in:      { algorithm: token-bucket, capacity: 60, refill-tokens: 10, refill-every: 1s, fail-open: true }

@@ -25,7 +25,7 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-/** Cancelling an event: only a published one that has not started, only by its organizer, and only once. */
+/** Cancelling an event: only a published one at least 3 days before it starts, only by its organizer, and only once. */
 class CancelEventApiTest extends ApiTest {
 
     @Autowired EventService eventService;
@@ -86,6 +86,26 @@ class CancelEventApiTest extends ApiTest {
     }
 
     @Test
+    void anEventThatStartsInLessThan3DaysCannotBeCancelled() throws Exception {
+        UUID me = user("ORGANIZER");
+        UUID event = eventStartingIn(me, "2 days 23 hours");
+
+        cancel(me, event).andExpect(status().isConflict()).andExpect(jsonPath("$.code").value("EVENT_NOT_EDITABLE"));
+
+        assertThat(statusOf(event)).isEqualTo("PUBLISHED");
+    }
+
+    @Test
+    void anEventThatStartsInMoreThan3DaysCanBeCancelled() throws Exception {
+        UUID me = user("ORGANIZER");
+        UUID event = eventStartingIn(me, "3 days 1 hour");
+
+        cancel(me, event).andExpect(status().isOk());
+
+        assertThat(statusOf(event)).isEqualTo("CANCELLED");
+    }
+
+    @Test
     void onlyItsOrganizerMayCancelIt() throws Exception {
         UUID event = Catalog.event(jdbc, user("ORGANIZER"), "PUBLISHED");
 
@@ -119,6 +139,15 @@ class CancelEventApiTest extends ApiTest {
         assertThat(statuses).containsOnlyOnce(200);
         assertThat(statuses).filteredOn(code -> code == 409).hasSize(callers - 1);
         assertThat(jdbc.queryForObject("select version from events where public_id = ?", Long.class, event)).isEqualTo(1);
+    }
+
+    /** A published event starting this far from now, with its sale closed a day before that. */
+    private UUID eventStartingIn(UUID organizer, String interval) {
+        UUID event = Catalog.event(jdbc, organizer, "PUBLISHED");
+        jdbc.update("update events set starts_at = now() + cast(? as interval), "
+                + "sale_ends_at = now() + cast(? as interval) - interval '1 day' where public_id = ?",
+                interval, interval, event);
+        return event;
     }
 
     private ResultActions cancel(UUID organizer, UUID event) throws Exception {

@@ -32,6 +32,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -48,6 +49,9 @@ public class EventService {
     static final int DEFAULT_MAX_TICKETS_PER_USER = 4;
 
     static final int MAX_PAGE_SIZE = 100;
+
+    /** An event can be cancelled only while it starts further from now than this. */
+    static final Duration CANCELLATION_NOTICE = Duration.ofDays(3);
 
     private final EventRepository eventRepository;
     private final TicketZoneRepository ticketZoneRepository;
@@ -239,8 +243,8 @@ public class EventService {
     }
 
     /**
-     * PUBLISHED -&gt; CANCELLED, only before the event starts and only by its organizer. One conditional UPDATE whose row
-     * count is checked. Nothing else happens here: the auction and booking jobs look for cancelled events and call off
+     * PUBLISHED -&gt; CANCELLED, only more than {@link #CANCELLATION_NOTICE} before the event starts and only by its
+     * organizer. One conditional UPDATE whose row count is checked. Nothing else happens here: the auction and booking jobs look for cancelled events and call off
      * auctions, cancel orders and ask for refunds shortly afterwards. Evicts the cached public pages.
      */
     @Transactional
@@ -248,9 +252,10 @@ public class EventService {
     public EventResponse cancel(UUID organizerPublicId, UUID eventPublicId) {
         Event event = requireOwner(organizerPublicId, eventRepository.findByPublicIdForUpdate(eventPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND)));
-        if (eventRepository.cancelEvent(event.getId(), clock.instant()) != 1) {
-            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE,
-                    "Only a published event that has not started can be cancelled");
+        Instant now = clock.instant();
+        if (eventRepository.cancelEvent(event.getId(), now, now.plus(CANCELLATION_NOTICE)) != 1) {
+            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE, "Only a published event that starts more than "
+                    + CANCELLATION_NOTICE.toDays() + " days from now can be cancelled");
         }
         // the bulk update cleared the persistence context, so this loads the event with its new status
         return EventResponse.from(eventRepository.findByPublicId(eventPublicId)
