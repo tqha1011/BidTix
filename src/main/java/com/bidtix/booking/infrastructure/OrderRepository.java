@@ -192,4 +192,18 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             "and not exists (select o.id from Order o where o.eventId = e.id " +
             "and o.status in (OrderStatus.PENDING_PAYMENT, OrderStatus.PAID))")
     List<Long> findCancelledEventsWithoutOpenOrders(@Param("cancelledBefore") Instant cancelledBefore);
+
+    /**
+     * Takes the lock of one user's ticket allowance for one event, waiting while another transaction holds it. It is a
+     * PostgreSQL advisory lock: no row is locked, and it is released when the transaction ends. Call it inside a
+     * transaction, before {@link #countBookedTickets}. (The function returns {@code void}, hence the {@code select 1}.)
+     */
+    @Query(value = "select 1 from pg_advisory_xact_lock(cast(:userId as int), cast(:eventId as int))", nativeQuery = true)
+    int lockTicketAllowance(@Param("userId") long userId, @Param("eventId") long eventId);
+
+    /** The tickets of the user's booking orders for the event that are unpaid or paid. Auction orders do not count. */
+    @Query("select coalesce(sum(i.quantity), 0) from Order o join o.items i " +
+            "where o.userId = :userId and o.eventId = :eventId and o.source = OrderSource.BOOKING " +
+            "and o.status in (OrderStatus.PENDING_PAYMENT, OrderStatus.PAID)")
+    long countBookedTickets(@Param("userId") long userId, @Param("eventId") long eventId);
 }

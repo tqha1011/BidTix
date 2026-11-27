@@ -78,6 +78,7 @@ public final class GeneralAdmissionFixtures {
         Instant now = Instant.now();
         return new Event(organizer.getId(), venue, title, null,
                 now.plus(30, ChronoUnit.DAYS), now.plus(31, ChronoUnit.DAYS),
-                now.minus(1, ChronoUnit.DAYS), now.plus(29, ChronoUnit.DAYS), 10);
+                now.minus(1, ChronoUnit.DAYS), now.plus(29, ChronoUnit.DAYS),
+                1_000_000);   // tests book freely with one user; TicketLimitTest sets its own limit
     }
 }

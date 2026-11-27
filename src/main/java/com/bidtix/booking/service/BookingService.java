@@ -138,10 +138,26 @@ public class BookingService {
             throw new BusinessException(ErrorCode.EVENT_NOT_ON_SALE);
         }
         validateZoneAndSeats(zone, request);
+        checkTicketLimit(user, event, zone, request);
 
         return zone.getZoneType() == ZoneType.SEATED
                 ? reserveSeats(user, event, zone, request)
                 : reserveQuantity(user, event, zone, request.quantity());
+    }
+
+    /**
+     * Refuses a request that would take the user past the event's {@code max_tickets_per_user}. The lock comes first:
+     * the user's other requests for this event wait until this transaction ends, so what they count includes the order
+     * made here. Other users are not held up.
+     */
+    private void checkTicketLimit(User user, Event event, TicketZone zone, BookingTicketRequest request) {
+        int requested = zone.getZoneType() == ZoneType.SEATED ? request.seatPublicIds().size() : request.quantity();
+        orderRepository.lockTicketAllowance(user.getId(), event.getId());
+        long booked = orderRepository.countBookedTickets(user.getId(), event.getId());
+        if (booked + requested > event.getMaxTicketsPerUser()) {
+            throw new BusinessException(ErrorCode.TICKET_LIMIT_EXCEEDED, "At most " + event.getMaxTicketsPerUser()
+                    + " tickets per user for this event, and you already have " + booked);
+        }
     }
 
     private BookingTicketSeatsResult reserveSeats(User user, Event event, TicketZone zone, BookingTicketRequest request) {
