@@ -90,7 +90,7 @@ seat-hold or payment flow).
 > from 2 hours before it starts until it ends (`CHECK_IN_NOT_OPEN`). A ticket of another event is `TICKET_NOT_FOUND`;
 > `TICKET_ALREADY_USED` carries `usedAt`. Keep the 2 hours shorter than the 3 days' cancellation notice, so no ticket is
 > USED when an event is cancelled. Rate limit policy `check-in`.
-> Not started: enforcing `max_tickets_per_user` and querying VNPAY for payments left
+> Not started: querying VNPAY for payments left
 > PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
 > logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (publish, update and cancel do) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES` and `CacheConfig.VENUE_PAGES`
@@ -159,7 +159,10 @@ Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-condition
 [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). The Redis refusal gate in front of it: [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md). At most
 `bidtix.booking.max-tickets-per-order` (5) tickets per order, and the zone must belong to the event. Only a PUBLISHED
 event sells (anything else is `EVENT_NOTFOUND`), and only from `sale_starts_at` until before `sale_ends_at`
-(`EVENT_NOT_ON_SALE`). The
+(`EVENT_NOT_ON_SALE`). A user's
+unpaid and paid BOOKING tickets of one event never exceed `events.max_tickets_per_user` (`TICKET_LIMIT_EXCEEDED`; auction
+orders do not count): inside the transaction, before any stock is taken, `reserve` takes a PostgreSQL advisory lock on
+(user id, event id) and then counts. Whatever else creates a booking order must take the same lock first. The
 method runs one transaction with `TransactionTemplate` (the gate check and its flags stay outside it) and returns a
 `BookingTicketSeatsResult` or a `BookingTicketQuantityResult` (both are a `BaseBookingTicketResult`), PENDING_PAYMENT and
 without tickets:

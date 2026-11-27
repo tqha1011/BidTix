@@ -40,14 +40,14 @@ The facts about this project in one place, for a portfolio, a CV or a quick revi
 | **Period** | Started November 2026, still in progress |
 | **Stack** | Java 21, Spring Boot 4 (Web MVC, Data JPA, Security), PostgreSQL, Flyway, Redis, VNPAY, JUnit 5, Testcontainers, k6, Docker, GitHub Actions |
 | **Architecture** | Modular monolith, package-by-feature, layered inside each module |
-| **Evidence** | 541 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
+| **Evidence** | 549 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
 
 **The problem.** When a popular concert goes on sale, thousands of requests compete for the same seats within seconds,
 clients retry, payment results arrive late or twice, and unpaid orders must give their stock back. Each of these can
 sell a ticket twice, lose money or lock inventory for good.
 
 **What was built.** Registration and login with rotating refresh tokens, venue and event management, booking of seated
-and standing tickets, English auctions with anti-sniping and second-chance offers, VNPAY payments and a refund job, event cancellation with refunds, ticket check-in,
+and standing tickets, English auctions with anti-sniping and second-chance offers, VNPAY payments and a refund job, event cancellation with refunds, ticket check-in, a per-user ticket limit,
 all on one PostgreSQL database with Redis used only where losing it cannot break correctness.
 
 **Highlights**
@@ -76,8 +76,7 @@ payment gateway integration, caching and rate limiting with Redis, JWT authentic
 testing, benchmarking and load testing, writing architecture decision records.
 
 **Scope of these claims.** Payments run against VNPAY's sandbox only, and refunds are not proven there yet. All
-performance figures come from simulated traffic on one laptop. There is no web or mobile client. The per-user ticket limit is
-not built. See [Limitations and roadmap](#limitations-and-roadmap).
+performance figures come from simulated traffic on one laptop. There is no web or mobile client. See [Limitations and roadmap](#limitations-and-roadmap).
 
 **Quoting the performance figures** (for a portfolio or a CV):
 
@@ -177,6 +176,7 @@ sequenceDiagram
     else No flag, expired flag or Redis down
         rect rgba(127, 127, 127, 0.15)
             Note over B,DB: One transaction
+            B->>DB: Lock this buyer and event, check the ticket limit
             B->>DB: Insert order, PENDING_PAYMENT
             B->>DB: Conditional UPDATE takes seats or counter stock
         end
@@ -350,6 +350,7 @@ stateDiagram-v2
 | Most requests lose once an event sells out | Redis flag that can only refuse, never grant; fails open ([ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md)) | Benchmarked on and off |
 | Unpaid orders keep stock locked | Batched cancellation with `SKIP LOCKED`; a failing batch is retried order by order | Several jobs at once give each order back once |
 | An event is called off after tickets were sold | One status change, then jobs that look for cancelled events; one transaction per paid order; an event is marked done only after a settle window | Several jobs at once refund each order once |
+| One buyer sends many orders at once to get past the ticket limit | A PostgreSQL advisory lock per buyer and event, then a count of their unpaid and paid tickets | 12 requests at once with a limit of 4: exactly 4 succeed |
 | Two gates scan the same QR code | One conditional `UPDATE` from `VALID` to `USED`; the row count decides who gets in | 10 scans at once: one admitted |
 | Many requests miss the cache together | Cache-aside with TTLs, evicted on write, with a locking cache writer | 16 simultaneous misses: one database load |
 | Stolen refresh token | Rotation with reuse detection; only token hashes are stored | Reuse revokes all of that user's sessions |
@@ -497,6 +498,8 @@ Known limits:
 - Only customers can register; organizer and admin accounts come from the seed or from SQL.
 - A cancelled event is cleaned up within seconds, not in the request. It is marked done 5 minutes later, which
   assumes no request that was running at the cancellation takes longer.
+- The load test and booking gate figures were measured before the per-user ticket limit added a lock and a count to
+  every booking. The booking gate benchmark shares 50 users among its threads, so it would now also measure that lock.
 - The sample data's paid orders have no payment, so cancelling a seeded event leaves them paid and logs an error on
   every run.
 - Reading an event counts its free seats with a query that PostgreSQL can plan as a scan of the whole seat table. With
@@ -514,11 +517,11 @@ Done:
 - [x] Concurrency tests, benchmarks and load tests
 - [x] Cancelling an event: auctions called off, orders cancelled, payments marked for refund
 - [x] Ticket check-in at the gate
+- [x] Per-user ticket limit
 
 Next:
 
 - [ ] Refunds proven on the VNPAY sandbox
-- [ ] Per-user ticket limit
 - [ ] Observability: a secured Prometheus endpoint
 
 ## Documentation
