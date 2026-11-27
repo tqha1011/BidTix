@@ -40,14 +40,14 @@ The facts about this project in one place, for a portfolio, a CV or a quick revi
 | **Period** | Started November 2026, still in progress |
 | **Stack** | Java 21, Spring Boot 4 (Web MVC, Data JPA, Security), PostgreSQL, Flyway, Redis, VNPAY, JUnit 5, Testcontainers, k6, Docker, GitHub Actions |
 | **Architecture** | Modular monolith, package-by-feature, layered inside each module |
-| **Evidence** | 481 automated tests (at commit `f8bd6b8`), reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
+| **Evidence** | 523 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
 
 **The problem.** When a popular concert goes on sale, thousands of requests compete for the same seats within seconds,
 clients retry, payment results arrive late or twice, and unpaid orders must give their stock back. Each of these can
 sell a ticket twice, lose money or lock inventory for good.
 
 **What was built.** Registration and login with rotating refresh tokens, venue and event management, booking of seated
-and standing tickets, English auctions with anti-sniping and second-chance offers, VNPAY payments and a refund job,
+and standing tickets, English auctions with anti-sniping and second-chance offers, VNPAY payments and a refund job, event cancellation with refunds,
 all on one PostgreSQL database with Redis used only where losing it cannot break correctness.
 
 **Highlights**
@@ -76,8 +76,8 @@ payment gateway integration, caching and rate limiting with Redis, JWT authentic
 testing, benchmarking and load testing, writing architecture decision records.
 
 **Scope of these claims.** Payments run against VNPAY's sandbox only, and refunds are not proven there yet. All
-performance figures come from simulated traffic on one laptop. There is no web or mobile client. Cancelling an event,
-the per-user ticket limit and ticket check-in are not built. See [Limitations and roadmap](#limitations-and-roadmap).
+performance figures come from simulated traffic on one laptop. There is no web or mobile client. The per-user ticket limit
+and ticket check-in are not built. See [Limitations and roadmap](#limitations-and-roadmap).
 
 **Quoting the performance figures** (for a portfolio or a CV):
 
@@ -261,10 +261,32 @@ sequenceDiagram
 | Offer expiry | every minute | an unpaid offer passes to the next bidder, at that bidder's own bid |
 | Unpaid order cancellation | every minute | expired booking orders are cancelled and their stock returns, 100 per transaction |
 | Refunds | every minute | requests refunds from VNPAY and confirms their outcome |
+| Cancelled events, auctions | every 5 s | calls off open auctions, with their offer and unpaid order |
+| Cancelled events, orders | every 5 s | cancels unpaid orders, and paid ones with their tickets, marking the payment for refund |
 
 Every job claims rows with `FOR UPDATE SKIP LOCKED`, so several application instances can run them. An expired order
 or offer with a payment still unconfirmed is kept 10 minutes longer, so a late callback does not punish a customer who
 paid in time.
+
+### Cancelling an event
+
+The request only changes the event's status. The jobs look for cancelled events and undo what was sold, so a crash or a
+request that was still running is picked up by a later run.
+
+```mermaid
+flowchart LR
+    cancel["Organizer cancels<br/>event CANCELLED"]
+    auctions["Open auctions cancelled,<br/>offers expired,<br/>unpaid auction orders cancelled"]
+    unpaid["Unpaid booking orders cancelled,<br/>stock released"]
+    paid["Paid orders and tickets cancelled,<br/>payment REFUND_PENDING<br/>one transaction per order"]
+    refund["Refund job asks VNPAY"]
+    done["Event marked cleaned up,<br/>at least 5 minutes after the cancellation"]
+
+    cancel --> auctions --> done
+    cancel --> unpaid --> done
+    cancel --> paid --> done
+    paid --> refund
+```
 
 ### Lifecycles
 
@@ -276,13 +298,14 @@ stateDiagram-v2
     [*] --> AVAILABLE
     AVAILABLE --> HELD: booked
     HELD --> SOLD: paid
-    HELD --> AVAILABLE: not paid in time
+    HELD --> AVAILABLE: not paid in time, or event cancelled
     AVAILABLE --> RESERVED_FOR_AUCTION: auctioned
     RESERVED_FOR_AUCTION --> SOLD: winner pays
     RESERVED_FOR_AUCTION --> AVAILABLE: auction failed or cancelled
 ```
 
-**Order:** `PENDING_PAYMENT` → `PAID`, or `CANCELLED` when the deadline passes.
+**Order:** `PENDING_PAYMENT` → `PAID`, or `CANCELLED` when the deadline passes. Cancelling the event cancels both
+unpaid and paid orders.
 
 **Auction**
 
@@ -291,8 +314,9 @@ stateDiagram-v2
     direction LR
     [*] --> SCHEDULED
     SCHEDULED --> LIVE: start time
-    SCHEDULED --> CANCELLED: organizer cancels
-    LIVE --> CANCELLED: cancelled with no bids
+    SCHEDULED --> CANCELLED: auction or event cancelled
+    LIVE --> CANCELLED: no bids, or event cancelled
+    AWAITING_PAYMENT --> CANCELLED: event cancelled
     LIVE --> AWAITING_PAYMENT: winner meets the reserve
     LIVE --> FAILED: no winner
     AWAITING_PAYMENT --> AWAITING_PAYMENT: next bidder gets the offer
@@ -309,6 +333,7 @@ stateDiagram-v2
     PENDING --> SUCCEEDED: applied to the order
     PENDING --> FAILED: declined
     PENDING --> REFUND_PENDING: money cannot be applied
+    SUCCEEDED --> REFUND_PENDING: event cancelled
     REFUND_PENDING --> REFUNDED: VNPAY confirms
 ```
 
@@ -324,6 +349,7 @@ stateDiagram-v2
 | Clients retry requests | Idempotency key and request hash for orders, bids and payments; the stored answer is replayed | 10 identical requests at once: runs once |
 | Most requests lose once an event sells out | Redis flag that can only refuse, never grant; fails open ([ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md)) | Benchmarked on and off |
 | Unpaid orders keep stock locked | Batched cancellation with `SKIP LOCKED`; a failing batch is retried order by order | Several jobs at once give each order back once |
+| An event is called off after tickets were sold | One status change, then jobs that look for cancelled events; one transaction per paid order; an event is marked done only after a settle window | Several jobs at once refund each order once |
 | Many requests miss the cache together | Cache-aside with TTLs, evicted on write, with a locking cache writer | 16 simultaneous misses: one database load |
 | Stolen refresh token | Rotation with reuse detection; only token hashes are stored | Reuse revokes all of that user's sessions |
 | Abuse and floods | Redis rate limits: fixed window for login and registration (fail-closed), token bucket per user | Parallel requests: exactly the limit gets through |
@@ -468,6 +494,10 @@ Known limits:
 - This is not hexagonal architecture: entities are JPA entities and services call repositories directly. Module
   boundaries are a convention that no test enforces.
 - Only customers can register; organizer and admin accounts come from the seed or from SQL.
+- A cancelled event is cleaned up within seconds, not in the request. It is marked done 5 minutes later, which
+  assumes no request that was running at the cancellation takes longer.
+- The sample data's paid orders have no payment, so cancelling a seeded event leaves them paid and logs an error on
+  every run.
 - Reading an event counts its free seats with a query that PostgreSQL can plan as a scan of the whole seat table. With
   600,000 seats in one zone it did, and the database used all its CPUs on it. The load test spreads those seats over
   zones of 1,000; the query is unchanged ([load test log](docs/load-test-log.md), run 22).
@@ -481,10 +511,10 @@ Done:
 - [x] VNPAY payments, idempotent callback, grace period, refund job
 - [x] Idempotency keys, Redis cache, rate limits, booking gate
 - [x] Concurrency tests, benchmarks and load tests
+- [x] Cancelling an event: auctions called off, orders cancelled, payments marked for refund
 
 Next:
 
-- [ ] Cancelling an event (only the skeletons of its clean-up jobs exist)
 - [ ] Refunds proven on the VNPAY sandbox
 - [ ] Per-user ticket limit and ticket check-in
 - [ ] Observability: a secured Prometheus endpoint
