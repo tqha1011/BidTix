@@ -1,5 +1,6 @@
 package com.bidtix.event.infrastructure;
 
+import java.util.List;
 import com.bidtix.event.domain.Event;
 import com.bidtix.event.domain.EventStatus;
 import org.springframework.data.domain.Page;
@@ -50,9 +51,27 @@ public interface EventRepository extends JpaRepository<Event, Long> {
     int publish(Long id, Instant now);
 
 
+    /**
+     * PUBLISHED -&gt; CANCELLED, only while the event has not started. The caller MUST check the row count: 0 means it may
+     * not be cancelled. Sets {@code cancelled_at}, and clears the persistence context like {@link #publish}.
+     */
     @Modifying(clearAutomatically = true)
     @Query("update Event e " +
             "set e.status = EventStatus.CANCELLED, e.version = e.version + 1, e.updatedAt = :now, e.cancelledAt = :now " +
-            "where e.id = :id and e.status = EventStatus.PUBLISHED and e.startsAt < :now and e.cancelledAt is null ")
-    int cancelEvent(@Param("id") Long id,@Param("now") Instant now);
+            "where e.id = :id and e.status = EventStatus.PUBLISHED and e.startsAt > :now")
+    int cancelEvent(@Param("id") Long id, @Param("now") Instant now);
+
+    /** The booking module has nothing left to clean up for these cancelled events. Returns how many were marked. */
+    @Modifying
+    @Query("update Event e set e.ordersCleanedAt = :now, e.version = e.version + 1, e.updatedAt = :now " +
+            "where e.id in :ids and e.status = com.bidtix.event.domain.EventStatus.CANCELLED " +
+            "and e.ordersCleanedAt is null")
+    int markOrdersCleaned(@Param("ids") List<Long> ids, @Param("now") Instant now);
+
+    /** The auction module has nothing left to clean up for these cancelled events. Returns how many were marked. */
+    @Modifying
+    @Query("update Event e set e.auctionsCleanedAt = :now, e.version = e.version + 1, e.updatedAt = :now " +
+            "where e.id in :ids and e.status = com.bidtix.event.domain.EventStatus.CANCELLED " +
+            "and e.auctionsCleanedAt is null")
+    int markAuctionsCleaned(@Param("ids") List<Long> ids, @Param("now") Instant now);
 }

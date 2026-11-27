@@ -86,6 +86,16 @@ public class EventController {
     }
 
     /**
+     * PUBLISHED -> CANCELLED, before the event starts (409 {@code EVENT_NOT_EDITABLE} otherwise). Its auctions are called
+     * off and its orders cancelled and refunded shortly afterwards. Only its organizer.
+     */
+    @PostMapping("/{eventPublicId}/cancel")
+    @PreAuthorize("hasRole('ORGANIZER')")
+    public EventResponse cancel(@PathVariable UUID eventPublicId, Principal principal) {
+        return eventService.cancel(CurrentUser.publicId(principal), eventPublicId);
+    }
+
+    /**
      * Replaces an event's data. A draft may change entirely, a published event only its title and description (409
      * {@code EVENT_NOT_EDITABLE} otherwise). Only its organizer.
      */

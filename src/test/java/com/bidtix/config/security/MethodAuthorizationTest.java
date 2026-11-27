@@ -414,6 +414,27 @@ class MethodAuthorizationTest {
         }
     }
 
+    // ---- POST /events/{id}/cancel: ORGANIZER only ---------------------------------------------
+
+    @Test
+    void cancelEvent_organizer_isAllowed_andServiceGetsTheTokenSubject() throws Exception {
+        UUID eventId = UUID.randomUUID();
+
+        mvc.perform(post("/api/v1/events/" + eventId + "/cancel").header(HttpHeaders.AUTHORIZATION, "Bearer ORGANIZER"))
+                .andExpect(status().isOk());
+
+        verify(eventService).cancel(eq(USER_ID), eq(eventId));
+    }
+
+    @Test
+    void cancelEvent_adminAndCustomer_areForbidden() throws Exception {
+        for (String role : List.of("ADMIN", "CUSTOMER")) {
+            mvc.perform(post("/api/v1/events/" + UUID.randomUUID() + "/cancel")
+                            .header(HttpHeaders.AUTHORIZATION, "Bearer " + role))
+                    .andExpect(forbidden());
+        }
+    }
+
     // ---- GET /events and GET /venues/{id}: any logged-in user ---------------------------------
 
     @Test

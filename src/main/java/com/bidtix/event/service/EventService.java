@@ -238,17 +238,23 @@ public class EventService {
         }
     }
 
+    /**
+     * PUBLISHED -&gt; CANCELLED, only before the event starts and only by its organizer. One conditional UPDATE whose row
+     * count is checked. Nothing else happens here: the auction and booking jobs look for cancelled events and call off
+     * auctions, cancel orders and ask for refunds shortly afterwards. Evicts the cached public pages.
+     */
     @Transactional
     @CacheEvict(cacheNames = CacheConfig.EVENTS, allEntries = true)
-    public void cancel(UUID organizerPublicId, UUID eventPublicId) {
+    public EventResponse cancel(UUID organizerPublicId, UUID eventPublicId) {
         Event event = requireOwner(organizerPublicId, eventRepository.findByPublicIdForUpdate(eventPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND)));
-        if (event.getStatus() != EventStatus.PUBLISHED) {
-            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE);
+        if (eventRepository.cancelEvent(event.getId(), clock.instant()) != 1) {
+            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE,
+                    "Only a published event that has not started can be cancelled");
         }
-        if(eventRepository.cancelEvent(event.getId(), clock.instant()) != 1) {
-            log.warn("The event {} was cancelled", event.getTitle());
-        }
+        // the bulk update cleared the persistence context, so this loads the event with its new status
+        return EventResponse.from(eventRepository.findByPublicId(eventPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND)));
     }
 
     /** The caller's event. Call it inside a transaction. */
