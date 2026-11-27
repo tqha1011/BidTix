@@ -43,6 +43,13 @@ public enum ErrorCode {
     ORDER_NOT_PAYABLE(HttpStatus.CONFLICT, "Order can no longer be paid"),
     ZONE_SOLD_OUT(HttpStatus.CONFLICT, "Not enough tickets left in this zone"),
 
+    // --- check-in ---
+    TICKET_NOT_FOUND(HttpStatus.NOT_FOUND, "Ticket not found"),
+    TICKET_ALREADY_USED(HttpStatus.CONFLICT, "The ticket was already used"),
+    TICKET_CANCELLED(HttpStatus.CONFLICT, "The ticket was cancelled"),
+    CHECK_IN_NOT_OPEN(HttpStatus.CONFLICT, "Check-in is not open for this event"),
+    TICKET_NOT_VALID(HttpStatus.BAD_REQUEST, "The ticket is not valid for this event"),
+
     // --- event ---
     VENUE_NOTFOUND(HttpStatus.NOT_FOUND, "Venue not found"),
     VENUE_IN_USE(HttpStatus.CONFLICT, "The venue is used by an event"),

@@ -52,14 +52,14 @@ public interface EventRepository extends JpaRepository<Event, Long> {
 
 
     /**
-     * PUBLISHED -&gt; CANCELLED, only while the event has not started. The caller MUST check the row count: 0 means it may
-     * not be cancelled. Sets {@code cancelled_at}, and clears the persistence context like {@link #publish}.
+     * PUBLISHED -&gt; CANCELLED, only if the event starts after {@code startsAfter}. The caller MUST check the row count: 0
+     * means it may not be cancelled. Sets {@code cancelled_at}, and clears the persistence context like {@link #publish}.
      */
     @Modifying(clearAutomatically = true)
     @Query("update Event e " +
             "set e.status = EventStatus.CANCELLED, e.version = e.version + 1, e.updatedAt = :now, e.cancelledAt = :now " +
-            "where e.id = :id and e.status = EventStatus.PUBLISHED and e.startsAt > :now")
-    int cancelEvent(@Param("id") Long id, @Param("now") Instant now);
+            "where e.id = :id and e.status = EventStatus.PUBLISHED and e.startsAt > :startsAfter")
+    int cancelEvent(@Param("id") Long id, @Param("now") Instant now, @Param("startsAfter") Instant startsAfter);
 
     /** The booking module has nothing left to clean up for these cancelled events. Returns how many were marked. */
     @Modifying
@@ -74,4 +74,8 @@ public interface EventRepository extends JpaRepository<Event, Long> {
             "where e.id in :ids and e.status = com.bidtix.event.domain.EventStatus.CANCELLED " +
             "and e.auctionsCleanedAt is null")
     int markAuctionsCleaned(@Param("ids") List<Long> ids, @Param("now") Instant now);
+
+
+
+
 }

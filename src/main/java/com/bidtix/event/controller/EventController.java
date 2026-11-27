@@ -86,7 +86,7 @@ public class EventController {
     }
 
     /**
-     * PUBLISHED -> CANCELLED, before the event starts (409 {@code EVENT_NOT_EDITABLE} otherwise). Its auctions are called
+     * PUBLISHED -> CANCELLED, more than 3 days before the event starts (409 {@code EVENT_NOT_EDITABLE} otherwise). Its auctions are called
      * off and its orders cancelled and refunded shortly afterwards. Only its organizer.
      */
     @PostMapping("/{eventPublicId}/cancel")

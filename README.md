@@ -270,7 +270,7 @@ paid in time.
 
 ### Cancelling an event
 
-The request only changes the event's status. The jobs look for cancelled events and undo what was sold, so a crash or a
+An organizer can cancel only more than 3 days before the start. The request only changes the event's status. The jobs look for cancelled events and undo what was sold, so a crash or a
 request that was still running is picked up by a later run.
 
 ```mermaid

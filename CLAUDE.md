@@ -82,7 +82,8 @@ seat-hold or payment flow).
 > reads fall back to the database and writes are ignored (fail-open).
 > `GET /api/v1/payments/vnpay/return` (public, signed, rate limit `vnpay-return`) shows the state of a payment and changes
 > nothing.
-> `POST /api/v1/events/{id}/cancel` (ORGANIZER, owner; only PUBLISHED and not started, one conditional UPDATE) cancels
+> `POST /api/v1/events/{id}/cancel` (ORGANIZER, owner; only PUBLISHED and starting more than 3 days
+> from now, one conditional UPDATE) cancels
 > an event; what was sold is undone by two jobs (see **Event cancellation**).
 > Not started: enforcing `max_tickets_per_user`, ticket check-in, and querying VNPAY for payments left
 > PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
