@@ -62,9 +62,12 @@ all on one PostgreSQL database with Redis used only where losing it cannot break
 - **Payments that survive bad timing:** signed callbacks are stored, applied exactly once, and marked for refund when
   the order can no longer take the money.
 - **Safe with several instances:** background jobs claim their rows with `FOR UPDATE SKIP LOCKED`.
-- **Load tested over HTTP:** 1,300+ requests/s with p95 under 350 ms at up to 150 concurrent requests and no failed
-  request (70% reads, 30% bookings; one application instance and PostgreSQL, 4 CPUs each; one laptop; three
-  [runs](#measured-results)). Over those runs 1,021,596 bookings left the stock counter matching the orders.
+- **Load tested over HTTP:** 1,300+ requests/s with p95 under 500 ms at up to 200 concurrent requests and no failed
+  request (70% reads, 30% bookings, half of them numbered seats and half standing tickets; one application instance and
+  PostgreSQL, 4 CPUs each; one laptop; three [runs](#measured-results) at 200). Over those three runs 888,510 bookings
+  left the stock counter and the seats matching the orders.
+- **Settings checked by measurement:** a connection pool of 30 gave 38 to 57% of the throughput of the default 10, and
+  Java 21 virtual threads showed no gain in throughput, so both defaults stayed.
 - **Checked under a simulated sale:** in 30 minutes with up to 1,000 shoppers and 150 bidders (259,006 requests, one run
   on 2 CPUs) 99.98% of requests succeeded and all 15 data integrity checks passed.
 
@@ -78,12 +81,18 @@ the per-user ticket limit and ticket check-in are not built. See [Limitations an
 
 **Quoting the performance figures** (for a portfolio or a CV):
 
-- Keep the conditions with the number: 4 CPUs each for the application and PostgreSQL, 70% reads and 30% bookings,
-  one laptop that also ran the load generator. They are not production capacity.
-- The p95 under 350 ms is over **all** requests. Bookings alone reached 753 ms at 100 to 150 concurrent requests.
+- Keep the conditions with the number: 4 CPUs each for the application and PostgreSQL, 70% reads and 30% bookings
+  (half numbered seats, half standing tickets), one laptop that also ran the load generator. They are not production
+  capacity.
+- The p95 under 500 ms is over **all** requests. Bookings alone reached 614 ms at 200 concurrent requests.
+- 200 concurrent requests holds for that mix only. With standing tickets only, p95 reached 669 ms at 200; for that
+  traffic quote p95 under 350 ms at up to 150 concurrent requests.
 - "Concurrent requests" means requests open at the same moment, not users.
-- A booking in the load test reserves stock; it does not pay.
-- Do not state a speed-up between 2 and 4 CPUs: the laptop's CPU clock differed between those configurations.
+- A booking in the load test reserves stock; it does not pay. Each seat booking asks for its own seat: buyers competing
+  for one seat are covered by the concurrency tests, not by these figures.
+- The load test and the sale day are different tests: do not combine their figures.
+- Do not state that seat bookings are faster than standing ones, or a speed-up between 2 and 4 CPUs: neither cause was
+  isolated.
 - The runs with several instances in the load test log are inconclusive experiments, not results to quote.
 
 ## Architecture
@@ -346,9 +355,25 @@ so compare the figures with each other rather than reading them as production ca
 
 **Cancelling unpaid orders:** 100 orders per transaction was 20 to 35 times faster than one per transaction.
 
-**Load test over HTTP, 4 CPUs** (k6; one application instance and PostgreSQL limited to 4 CPUs each, connection pool
-of 10; 70% reads, 30% bookings of one standing ticket, all from the same zone counter; 60 s per level; three runs on
-2026-11-26 at commit `bff74cf`; raw results in the [load test log](docs/load-test-log.md), runs 17 and 18)
+**Load test over HTTP, 4 CPUs, seats and standing tickets** (k6; one application instance and PostgreSQL limited to
+4 CPUs each, connection pool of 10; 70% reads, 30% bookings, half of them one numbered seat and half one standing
+ticket from a single zone counter; 600,000 seats seeded; 60 s per level; 2026-11-27, code as of commit `38315dc`; raw
+results in the [load test log](docs/load-test-log.md), runs 23 and 24). One figure per measurement:
+
+| Requests open at once | Requests/s | p95 ms, all requests | p95 ms, bookings only |
+|--:|--:|--:|--:|
+| 100 | 2,063 / 1,894 | 154 / 185 | 301 / 317 |
+| 150 | 2,233 / 2,009 / 2,170 / 2,230 | 216 / 253 / 225 / 213 | 350 / 465 / 372 / 391 |
+| 200 | 1,917 / 2,054 / 2,267 | 377 / 325 / 283 | 614 / 571 / 458 |
+| 250 | 1,984 / 1,980 | 386 / 390 | 699 / 692 |
+| 300 | 1,734 / 1,983 / 1,948 / 2,092 / 1,461 | 575 / 435 / 457 / 336 / 726 | 841 / 726 / 745 / 640 / 980 |
+
+No request failed in any measured level (warm-up is not counted), and the stock counter and the seats matched the orders
+after every run. At 200 all three runs stayed under a p95 of 500 ms, one of them over 350 ms. At 300 two of five
+measurements went over 500 ms. An order holds one seat, and the seat map is not read.
+
+**Load test over HTTP, 4 CPUs, standing tickets only** (same limits and mix, every booking one standing ticket from the
+same zone counter; three runs on 2026-11-26 at commit `bff74cf`, runs 17 and 18)
 
 | Requests open at once | Requests/s, run 1 / 2 / 3 | p95 ms, all requests | p95 ms, bookings only |
 |--:|--:|--:|--:|
@@ -359,7 +384,15 @@ of 10; 70% reads, 30% bookings of one standing ticket, all from the same zone co
 
 No request failed in any measured level (warm-up is not counted), and the stock counter matched the orders after every
 run. At 200 open requests one run of three went over a p95 of 500 ms. The same level differs by up to about 35% between
-runs; the cause was not isolated. The highest level tried was 200.
+runs; the cause was not isolated. In a later comparison on the same data (run 23, two runs each, 100 and 150 open),
+standing tickets only gave 1,445 to 1,792 requests/s and the mix with seats 1,894 to 2,233; the likely reason, half as
+many bookings queuing on one counter row, was not isolated.
+
+**Connection pool and virtual threads** (4 CPUs, standing tickets only, two runs per setting; runs 20 and 21). A pool of
+30 gave 38 to 57% of the requests/s of a pool of 10 at 100 to 400 open requests. In the pool 30 runs every database
+statement over 1 s was the update of the one zone counter, so that row is the likely limit. Virtual threads made no
+difference to requests/s that the runs could show; at high concurrency reads were faster, bookings slower and memory
+use higher. Both settings stayed at their defaults.
 
 **Load test over HTTP, 2 CPUs** (k6; application and PostgreSQL limited to 2 CPUs each; commit `6dd5be7`)
 
@@ -435,6 +468,9 @@ Known limits:
 - This is not hexagonal architecture: entities are JPA entities and services call repositories directly. Module
   boundaries are a convention that no test enforces.
 - Only customers can register; organizer and admin accounts come from the seed or from SQL.
+- Reading an event counts its free seats with a query that PostgreSQL can plan as a scan of the whole seat table. With
+  600,000 seats in one zone it did, and the database used all its CPUs on it. The load test spreads those seats over
+  zones of 1,000; the query is unchanged ([load test log](docs/load-test-log.md), run 22).
 
 Done:
 

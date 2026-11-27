@@ -565,7 +565,13 @@ How many requests per second at most, and how many requests the application can 
 
 ```bash
 make load-test PROFILE=concurrency     # about 55 minutes; LEVELS, ROUNDS, LEVEL_SECONDS, BOOK_SHARE change the run
+SEATED_SHARE=0.5 make load-test PROFILE=concurrency   # half of the bookings take a numbered seat
 ```
+
+`SEATED_SHARE` seeds a hall of 600,000 seats in zones of 1,000 (`HOT_SEATS`) and gives every seat booking its own seat;
+`POOL`, `VIRTUAL_THREADS` and `JAVA_EXTRA` change the application. The later runs on 4 CPUs (seats, pool size, virtual
+threads) are in the [README](../README.md#measured-results) and the [load test log](load-test-log.md), runs 17 to 24; the
+results below are the earlier ones on 2 CPUs.
 
 70% reads and 30% bookings (one standing ticket, all in one zone). Every client sends its next request as soon as the
 answer arrives, so the number of clients is the number of requests open. Each stack is first warmed up at 50 open

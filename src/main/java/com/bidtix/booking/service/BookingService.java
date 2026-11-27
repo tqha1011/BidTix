@@ -267,7 +267,7 @@ public class BookingService {
         }
 
         // Fetch available seats & index them by public id
-        Map<UUID, Seat> availableSeats = seatRepository.findAllAvailableSeatByTicketZoneId(zoneId)
+        Map<UUID, Seat> availableSeats = seatRepository.findAvailableSeatRequestByTicketZoneIdAndPublicIds(zoneId, requestedSeats)
                 .stream()
                 .collect(Collectors.toMap(Seat::getPublicId, Function.identity()));
 

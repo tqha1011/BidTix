@@ -1,9 +1,12 @@
 -- Data for the load test, on a database Flyway has just built. Run by loadtest/run.sh:
---   psql -v users=5000 -f seed.sql
+--   psql -v users=5000 -v hot_seats=0 -f seed.sql
 -- Public ids are derived from a number, so tokens.sh and script.js can name rows without reading them back:
 --   customer i : 00000000-0000-4000-8000-<i, 12 digits>
 --   event n    : 00000000-0000-4000-9000-<n, 12 digits>
 --   hot zone   : 00000000-0000-4000-a000-000000000001   (standing, in event 1, never sells out during a test)
+--   hall block b: 00000000-0000-4000-a001-<b, 12 digits>  (seated zones of 1000 seats in event 51, only when hot_seats
+--                is above 0)
+--   hall seat i : 00000000-0000-4000-b000-<i, 12 digits>  (0 to hot_seats - 1, in the order of their ids; in block i / 1000)
 \set ON_ERROR_STOP on
 BEGIN;
 
@@ -48,6 +51,33 @@ INSERT INTO ticket_zones (public_id, event_id, name, zone_type, price, capacity,
 SELECT '00000000-0000-4000-a000-000000000001', id, 'Hot', 'GENERAL_ADMISSION', 500000, 10000000, 10000000
 FROM events
 WHERE public_id = '00000000-0000-4000-9000-000000000001';
+
+-- A hall large enough that a test never runs out of seats to book. It has its own event, which the reads never ask
+-- for: counting the free seats of so many zones on every event detail would change what the reads cost. The seats are
+-- spread over zones of 1000: with all of them in one zone, PostgreSQL expects every zone to be that large and reads
+-- the whole seat table to count the free seats of any other event.
+INSERT INTO events (public_id, organizer_id, venue_id, title, description, starts_at, ends_at,
+                    sale_starts_at, sale_ends_at, status)
+SELECT '00000000-0000-4000-9000-000000000051',
+       (SELECT id FROM users WHERE email = 'organizer@loadtest.invalid'),
+       (SELECT id FROM venues WHERE name = 'Load Test Arena'),
+       'Load Test Hall', 'Created by loadtest/seed.sql',
+       now() + interval '30 days' + interval '51 minutes', now() + interval '31 days' + interval '51 minutes',
+       now() - interval '1 day', now() + interval '29 days', 'PUBLISHED'
+WHERE :hot_seats > 0;
+
+INSERT INTO ticket_zones (public_id, event_id, name, zone_type, price, capacity)
+SELECT ('00000000-0000-4000-a001-' || lpad(b::text, 12, '0'))::uuid, e.id, 'Block ' || b, 'SEATED', 900000,
+       least(1000, :hot_seats - b * 1000)
+FROM events e
+         CROSS JOIN generate_series(0, (:hot_seats - 1) / 1000) AS b
+WHERE e.public_id = '00000000-0000-4000-9000-000000000051';
+
+INSERT INTO seats (public_id, zone_id, row_label, seat_number)
+SELECT ('00000000-0000-4000-b000-' || lpad(i::text, 12, '0'))::uuid, z.id, 'R', i % 1000 + 1
+FROM generate_series(0, :hot_seats - 1) AS i
+         JOIN ticket_zones z ON z.public_id = ('00000000-0000-4000-a001-' || lpad((i / 1000)::text, 12, '0'))::uuid
+ORDER BY i;
 
 COMMIT;
 ANALYZE;

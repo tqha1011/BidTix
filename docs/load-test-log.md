@@ -28,7 +28,9 @@ One laptop runs everything: the application, PostgreSQL, Redis and the load gene
 Application code: commit `6dd5be7` for runs 1 to 13 (the commits after it add only the image build, scripts and documents);
 runs 14 and later say which commit they ran.
 Scripts were still uncommitted during runs 1 to 9 (committed as `e8bdd7d` and `89ead81`), and the concurrency
-profile was not yet committed during runs 10 to 12. Times are UTC+7.
+profile was not yet committed during runs 10 to 12. What runs 19 to 24 ran uncommitted on top of `37618ae` was committed
+afterwards, as of `38315dc`: runs 19 to 21 had its `VIRTUAL_THREADS` and `JAVA_EXTRA` settings only, and the first trial of run 22
+an earlier seed. Times are UTC+7.
 In the tables, CPU is in percent of one core, so 200% means both of a container's cores are busy.
 
 ## 2026-11-25
@@ -1315,3 +1317,929 @@ Round 1 ended 22:14:57.
 - The same level differs by up to about 35% between passes. The cause was not isolated.
 - Across the three passes, warm-up included, 1,021,596 bookings were taken from the hot zone and the stock matched the
   orders after each. No `ERROR` line or deadlock in the logs.
+
+## 2026-11-27
+
+### Run 19: trial of the pool size and virtual thread settings
+
+- **When:** 00:00 to 00:03
+- **Purpose:** check that `POOL`, `VIRTUAL_THREADS` and `JAVA_EXTRA` reach the application. Application and database
+  on 2 CPUs, 15 s measured after almost no warm-up: **the figures mean nothing**
+- **Seen:** request threads named `nio-8080-exec-N` with virtual threads off and `tomcat-handler-N` with them on; 30
+  connections in use with pool 30; no pinned thread trace. "Busy threads" reads 0 with virtual threads, so that column
+  says nothing about them
+
+#### pool 30, platform threads
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 2 CPU / 2 GB, PostgreSQL 2 CPU / 1 GB, Redis 1 CPU; pool 30; virtual threads false; JVM -Djdk.tracePinnedThreads=short -Dlogging.level.org.springframework.web.servlet.DispatcherServlet=DEBUG
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 300; 15s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 00:01:05
+
+Warm-up, not counted: 1 runs at 10 requests at once, req/s 73.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 300 | 116 | 2385 | 5711 | 7201 | 3110 | 6937 | 0.06% | 1 | 276 | slow |
+
+Server side (CPU: 100% = one core; connections: pool of 30 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 300 | 200 | 30 | 134 | 156.4 | 690.8 | 29.6 | 201% | 55% | 5% | - | 23% | 163 MB |
+
+Stock check: 1355 tickets taken from the hot zone, 1355 in orders.
+
+Requests answered by each instance since it started: 4424.
+
+**Highest rate without breaking: 116 req/s**, with 300 requests open, p95 5711 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 0** (held for 5s: no).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 00:02:15.
+
+#### pool 30, virtual threads
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 2 CPU / 2 GB, PostgreSQL 2 CPU / 1 GB, Redis 1 CPU; pool 30; virtual threads true; JVM -Djdk.tracePinnedThreads=short -Dlogging.level.org.springframework.web.servlet.DispatcherServlet=DEBUG
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 300; 15s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 00:02:41
+
+Warm-up, not counted: 1 runs at 10 requests at once, req/s 94.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 300 | 128 | 2024 | 4403 | 5412 | 3778 | 5037 | 0% | 0 | 258 | slow |
+
+Server side (CPU: 100% = one core; connections: pool of 30 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 300 | 0 | 30 | 148 | 137.0 | 507.1 | 26.5 | 164% | 50% | 6% | - | 29% | 164 MB |
+
+Stock check: 1471 tickets taken from the hot zone, 1471 in orders.
+
+Requests answered by each instance since it started: 4925.
+
+**Highest rate without breaking: 128 req/s**, with 300 requests open, p95 4403 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 0** (held for 5s: no).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 00:03:52.
+
+### Run 20: connection pool 10 against 30
+
+- **When:** 00:04 to 00:58, on mains power; platform profile `balanced-performance`, energy preference
+  `balance_performance`, the same at the start and the end
+- **Command:** `APP_CPUS=4 DB_CPUS=4 POOL=<10|30> JAVA_EXTRA=-Djdk.tracePinnedThreads=short ROUNDS=1
+  LEVELS="100 200 400" LEVEL_SECONDS=60 CONFIRM=60 WARM_MIN=5 WARM_MAX=7 loadtest/run.sh concurrency`, order 10, 30, 30, 10
+- **Code:** commit 37618ae with the `VIRTUAL_THREADS` and `JAVA_EXTRA` settings of `loadtest/` not yet committed
+- **Host:** the IDE and a web browser were closed during the warm-up of the first run
+
+**CPU clock** (mean of all cores, sampled every 15 s over the whole run) and the application container's memory:
+
+| run | mean MHz | samples under 1.2 GHz | samples over 2.5 GHz | mean °C | highest °C | highest app memory |
+|---|--:|--:|--:|--:|--:|--:|
+| pool10-1 | 2361 | 30% | 52% | 56 | 68 | 715 MiB |
+| pool30-1 | 1918 | 36% | 31% | 48 | 57 | 660 MiB |
+| pool30-2 | 2163 | 24% | 45% | 48 | 64 | 686 MiB |
+| pool10-2 | 2280 | 33% | 53% | 53 | 66 | 732 MiB |
+
+#### pool10-1
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false; JVM -Djdk.tracePinnedThreads=short
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 100 200 400; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 00:04:38
+
+Warm-up, not counted: 7 runs at 50 requests at once, req/s 233 988 1974 1334 1635 1384 1723.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 100 | 1942 | 51 | 160 | 199 | 50 | 190 | 0% | 0 | 99 | good |
+| ladder | 200 | 1707 | 117 | 369 | 459 | 124 | 437 | 0% | 0 | 199 | good |
+| ladder | 400 | 1439 | 279 | 731 | 1444 | 525 | 1351 | 0% | 0 | 402 | slow |
+| between | 300 | 1480 | 202 | 554 | 1250 | 349 | 1154 | 0% | 0 | 299 | slow |
+| confirm | 200 | 1767 | 113 | 336 | 795 | 117 | 644 | 0% | 0 | 199 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 100 | 100 | 10 | 90 | 2.8 | 28.9 | 8.2 | 283% | 222% | 18% | - | 115% | 128 MB |
+| ladder | 200 | 200 | 10 | 190 | 3.3 | 70.8 | 8.6 | 288% | 220% | 19% | - | 116% | 162 MB |
+| ladder | 400 | 200 | 10 | 190 | 4.0 | 85.6 | 8.9 | 255% | 196% | 17% | - | 109% | 226 MB |
+| between | 300 | 200 | 10 | 190 | 3.8 | 81.6 | 8.8 | 255% | 196% | 17% | - | 109% | 190 MB |
+| confirm | 200 | 200 | 10 | 190 | 3.2 | 68.3 | 8.5 | 265% | 212% | 16% | - | 113% | 158 MB |
+
+Stock check: 355853 tickets taken from the hot zone, 355853 in orders.
+
+Requests answered by each instance since it started: 1185929.
+
+**Highest rate without breaking: 1942 req/s**, with 100 requests open, p95 160 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 200** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 00:19:49.
+
+#### pool30-1
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 30; virtual threads false; JVM -Djdk.tracePinnedThreads=short
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 100 200 400; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 00:20:13
+
+Warm-up, not counted: 6 runs at 50 requests at once, req/s 197 694 829 932 712 759.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 100 | 734 | 136 | 526 | 1038 | 114 | 916 | 0% | 0 | 100 | slow |
+| ladder | 200 | 764 | 261 | 905 | 2012 | 318 | 1860 | 0% | 0 | 200 | slow |
+| ladder | 400 | 771 | 516 | 1215 | 2601 | 777 | 2266 | 0% | 0 | 398 | slow |
+
+Server side (CPU: 100% = one core; connections: pool of 30 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 100 | 100 | 30 | 71 | 26.1 | 60.6 | 28.9 | 141% | 311% | 11% | - | 60% | 108 MB |
+| ladder | 200 | 200 | 30 | 170 | 25.4 | 144.9 | 29.1 | 147% | 289% | 11% | - | 62% | 145 MB |
+| ladder | 400 | 200 | 30 | 170 | 24.4 | 139.6 | 28.5 | 142% | 314% | 10% | - | 62% | 212 MB |
+
+Stock check: 129352 tickets taken from the hot zone, 129352 in orders.
+
+Requests answered by each instance since it started: 432117.
+
+**Highest rate without breaking: 771 req/s**, with 400 requests open, p95 1215 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 0** (held for 60s: no).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 00:31:24.
+
+#### pool30-2
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 30; virtual threads false; JVM -Djdk.tracePinnedThreads=short
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 100 200 400; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 00:31:49
+
+Warm-up, not counted: 6 runs at 50 requests at once, req/s 217 688 939 887 771 733.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 100 | 689 | 144 | 590 | 1120 | 144 | 992 | 0% | 0 | 99 | slow |
+| ladder | 200 | 789 | 253 | 874 | 1908 | 288 | 1749 | 0% | 0 | 200 | slow |
+| ladder | 400 | 860 | 464 | 1107 | 1702 | 620 | 1548 | 0% | 0 | 399 | slow |
+
+Server side (CPU: 100% = one core; connections: pool of 30 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 100 | 100 | 30 | 71 | 27.6 | 64.0 | 29.2 | 140% | 288% | 11% | - | 56% | 108 MB |
+| ladder | 200 | 200 | 30 | 170 | 24.5 | 140.1 | 29.0 | 150% | 289% | 11% | - | 65% | 147 MB |
+| ladder | 400 | 200 | 30 | 170 | 22.2 | 127.2 | 28.4 | 155% | 336% | 11% | - | 68% | 212 MB |
+
+Stock check: 134413 tickets taken from the hot zone, 134413 in orders.
+
+Requests answered by each instance since it started: 448401.
+
+**Highest rate without breaking: 860 req/s**, with 400 requests open, p95 1107 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 0** (held for 60s: no).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 00:43:03.
+
+#### pool10-2
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false; JVM -Djdk.tracePinnedThreads=short
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 100 200 400; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 00:43:26
+
+Warm-up, not counted: 7 runs at 50 requests at once, req/s 213 608 1827 2054 1787 1409 1719.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 100 | 1795 | 55 | 161 | 412 | 55 | 276 | 0% | 0 | 99 | good |
+| ladder | 200 | 1808 | 110 | 323 | 786 | 114 | 612 | 0% | 0 | 199 | good |
+| ladder | 400 | 1502 | 264 | 708 | 1551 | 530 | 1342 | 0% | 0 | 397 | slow |
+| between | 300 | 1765 | 169 | 399 | 942 | 190 | 672 | 0% | 0 | 299 | good |
+| confirm | 300 | 1428 | 209 | 603 | 1492 | 373 | 1336 | 0% | 0 | 299 | slow |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 100 | 100 | 10 | 90 | 3.1 | 31.5 | 8.6 | 280% | 223% | 18% | - | 111% | 125 MB |
+| ladder | 200 | 200 | 10 | 190 | 3.1 | 67.5 | 8.7 | 282% | 212% | 18% | - | 116% | 161 MB |
+| ladder | 400 | 200 | 10 | 190 | 3.7 | 79.3 | 8.7 | 237% | 198% | 16% | - | 109% | 224 MB |
+| between | 300 | 200 | 10 | 190 | 3.2 | 68.8 | 8.6 | 278% | 214% | 18% | - | 119% | 197 MB |
+| confirm | 300 | 200 | 10 | 190 | 4.0 | 84.2 | 8.9 | 246% | 191% | 16% | - | 107% | 189 MB |
+
+Stock check: 367222 tickets taken from the hot zone, 367222 in orders.
+
+Requests answered by each instance since it started: 1223542.
+
+**Highest rate without breaking: 1808 req/s**, with 200 requests open, p95 323 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 300** (held for 60s: no).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 00:58:27.
+
+**Side by side** (pass 1 / pass 2)
+
+| open requests | req/s, pool 10 | req/s, pool 30 | p95 ms, pool 10 | p95 ms, pool 30 | booking p95 ms, pool 10 | booking p95 ms, pool 30 |
+|--:|--:|--:|--:|--:|--:|--:|
+| 100 | 1942 / 1795 | 734 / 689 | 160 / 161 | 526 / 590 | 190 / 276 | 916 / 992 |
+| 200 | 1707 / 1808 | 764 / 789 | 369 / 323 | 905 / 874 | 437 / 612 | 1860 / 1749 |
+| 400 | 1439 / 1502 | 771 / 860 | 731 / 708 | 1215 / 1107 | 1351 / 1342 | 2266 / 1548 |
+
+- Pool 30 gave 38 to 57% of the requests per second of pool 10 at every level, in both passes. No request failed.
+- With pool 30 a connection was held 22 to 28 ms (pool 10: 3 to 4 ms), the database used more CPU (288 to 336% against
+  191 to 223%) and the application less (140 to 155% against 237 to 288%).
+- The database logged 389 and 331 statements over 1 s in the two pool 30 runs (median 1.2 s in the first). Every one was
+  the update of the counter of the one standing zone that all bookings take from. The pool 10 runs logged none. So the
+  likely limit is that row: more connections put more transactions behind it. Wait events were not sampled.
+- 986,840 bookings in the four runs; the stock matched the orders after each. No `ERROR` line or deadlock in the logs.
+
+### Run 21: platform against virtual threads
+
+- **When:** 00:58 to 01:54, following run 20, same machine state
+- **Command:** as run 20 with pool 10, `VIRTUAL_THREADS=<false|true>` and `LEVELS="200 400 800 1600"`, order off, on, on, off
+
+**CPU clock and memory** (as in run 20; the heap figure is the largest left after a collection, from the GC log):
+
+| run | mean MHz | samples under 1.2 GHz | samples over 2.5 GHz | mean °C | highest °C | highest app memory | heap after GC |
+|---|--:|--:|--:|--:|--:|--:|--:|
+| vtoff-1 | 1876 | 45% | 36% | 49 | 63 | 800 MiB | 210 MB |
+| vton-1 | 2370 | 25% | 49% | 55 | 71 | 1270 MiB | 629 MB |
+| vton-2 | 2405 | 33% | 54% | 54 | 72 | 1094 MiB | 598 MB |
+| vtoff-2 | 2277 | 32% | 49% | 52 | 65 | 776 MiB | 208 MB |
+
+#### vtoff-1
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false; JVM -Djdk.tracePinnedThreads=short
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 200 400 800 1600; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 00:58:51
+
+Warm-up, not counted: 6 runs at 50 requests at once, req/s 224 459 1615 1519 1894 1817.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 200 | 1241 | 161 | 669 | 1215 | 249 | 1134 | 0% | 0 | 200 | slow |
+| ladder | 400 | 1782 | 224 | 477 | 1088 | 304 | 860 | 0% | 0 | 399 | good |
+| ladder | 800 | 1406 | 568 | 1437 | 2193 | 1251 | 2069 | 0% | 0 | 799 | slow |
+| ladder | 1600 | 1486 | 1094 | 2862 | 3649 | 2719 | 3531 | 0% | 0 | 1626 | slow |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 200 | 200 | 10 | 190 | 4.9 | 100.4 | 9.1 | 225% | 179% | 15% | - | 99% | 155 MB |
+| ladder | 400 | 200 | 10 | 191 | 3.1 | 68.3 | 8.6 | 282% | 215% | 19% | - | 120% | 233 MB |
+| ladder | 800 | 200 | 10 | 190 | 4.2 | 87.8 | 8.8 | 240% | 197% | 16% | - | 111% | 359 MB |
+| ladder | 1600 | 200 | 10 | 191 | 4.0 | 84.3 | 8.8 | 262% | 192% | 17% | - | 114% | 632 MB |
+
+Stock check: 275249 tickets taken from the hot zone, 275249 in orders.
+
+Requests answered by each instance since it started: 918303.
+
+**Highest rate without breaking: 1782 req/s**, with 400 requests open, p95 477 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 0** (held for 60s: no).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 01:11:31.
+
+#### vton-1
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads true; JVM -Djdk.tracePinnedThreads=short
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 200 400 800 1600; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 01:11:55
+
+Warm-up, not counted: 5 runs at 50 requests at once, req/s 312 1202 1838 1736 1660.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 200 | 1558 | 129 | 436 | 949 | 167 | 811 | 0% | 0 | 201 | good |
+| ladder | 400 | 1835 | 217 | 697 | 1473 | 268 | 1124 | 0% | 0 | 399 | slow |
+| ladder | 800 | 1695 | 470 | 1503 | 3242 | 666 | 2720 | 0% | 0 | 798 | slow |
+| ladder | 1600 | 1809 | 849 | 2855 | 4282 | 1061 | 3749 | 0% | 1 | 1536 | slow |
+| between | 300 | 1356 | 222 | 889 | 1704 | 363 | 1556 | 0% | 0 | 302 | slow |
+| confirm | 200 | 1814 | 110 | 346 | 758 | 132 | 549 | 0% | 0 | 199 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 200 | 0 | 10 | 190 | 3.7 | 78.7 | 8.5 | 252% | 187% | 15% | - | 104% | 159 MB |
+| ladder | 400 | 0 | 10 | 390 | 3.0 | 136.6 | 8.6 | 286% | 204% | 18% | - | 111% | 232 MB |
+| ladder | 800 | 0 | 10 | 790 | 3.3 | 300.3 | 8.3 | 258% | 194% | 17% | - | 113% | 369 MB |
+| ladder | 1600 | 0 | 10 | 1594 | 3.0 | 556.5 | 8.3 | 288% | 199% | 18% | - | 116% | 634 MB |
+| between | 300 | 0 | 10 | 290 | 4.4 | 141.2 | 8.9 | 231% | 179% | 15% | - | 103% | 189 MB |
+| confirm | 200 | 0 | 10 | 190 | 3.1 | 66.9 | 8.6 | 271% | 211% | 18% | - | 110% | 160 MB |
+
+Stock check: 347379 tickets taken from the hot zone, 347379 in orders.
+
+Requests answered by each instance since it started: 1158592.
+
+**Highest rate without breaking: 1835 req/s**, with 400 requests open, p95 697 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 200** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 01:26:25.
+
+#### vton-2
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads true; JVM -Djdk.tracePinnedThreads=short
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 200 400 800 1600; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 01:26:50
+
+Warm-up, not counted: 6 runs at 50 requests at once, req/s 339 1562 1854 1417 1604 1502.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 200 | 1349 | 148 | 570 | 1128 | 233 | 1033 | 0% | 0 | 200 | slow |
+| ladder | 400 | 1697 | 235 | 747 | 1703 | 313 | 1262 | 0% | 0 | 399 | slow |
+| ladder | 800 | 1238 | 650 | 2121 | 8488 | 713 | 7957 | 0.02% | 13 | 804 | slow |
+| ladder | 1600 | 1530 | 1086 | 3553 | 10000 | 1233 | 10000 | 1.66% | 1521 | 1662 | **broken** |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 200 | 0 | 10 | 190 | 4.3 | 89.6 | 8.9 | 238% | 184% | 15% | - | 98% | 155 MB |
+| ladder | 400 | 0 | 10 | 390 | 3.3 | 148.3 | 8.7 | 264% | 196% | 17% | - | 109% | 230 MB |
+| ladder | 800 | 0 | 10 | 791 | 4.9 | 420.7 | 9.0 | 220% | 146% | 14% | - | 86% | 361 MB |
+| ladder | 1600 | 0 | 10 | 1663 | 4.3 | 707.4 | 8.9 | 233% | 148% | 15% | - | 87% | 636 MB |
+
+Stock check: 288145 tickets taken from the hot zone, 288145 in orders.
+
+Requests answered by each instance since it started: 962076.
+
+**Highest rate without breaking: 1697 req/s**, with 400 requests open, p95 747 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 0** (held for 60s: no).
+**Broke (1% or more failed) at 1600 requests open.**
+Round 1 ended 01:39:29.
+
+#### vtoff-2
+
+- Commit 37618ae
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false; JVM -Djdk.tracePinnedThreads=short
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 200 400 800 1600; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+
+##### Round 1, started 01:39:53
+
+Warm-up, not counted: 5 runs at 50 requests at once, req/s 212 911 1565 1722 1655.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 200 | 1446 | 138 | 456 | 1034 | 185 | 970 | 0% | 0 | 199 | good |
+| ladder | 400 | 1792 | 223 | 476 | 1081 | 295 | 761 | 0% | 0 | 399 | good |
+| ladder | 800 | 1552 | 521 | 1285 | 2024 | 1138 | 1880 | 0% | 0 | 808 | slow |
+| ladder | 1600 | 1758 | 910 | 1635 | 3283 | 1449 | 2035 | 0% | 0 | 1600 | slow |
+| between | 600 | 1764 | 340 | 699 | 1412 | 630 | 1154 | 0% | 0 | 599 | slow |
+| confirm | 400 | 1750 | 228 | 481 | 1201 | 282 | 690 | 0% | 0 | 399 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 200 | 200 | 10 | 190 | 4.0 | 84.5 | 8.9 | 250% | 195% | 16% | - | 106% | 156 MB |
+| ladder | 400 | 200 | 10 | 190 | 3.1 | 68.2 | 8.6 | 274% | 219% | 18% | - | 121% | 235 MB |
+| ladder | 800 | 200 | 10 | 190 | 3.8 | 80.3 | 8.8 | 251% | 197% | 17% | - | 117% | 369 MB |
+| ladder | 1600 | 200 | 10 | 190 | 3.2 | 69.4 | 8.6 | 276% | 234% | 18% | - | 121% | 635 MB |
+| between | 600 | 200 | 10 | 190 | 3.1 | 68.4 | 8.6 | 269% | 221% | 19% | - | 124% | 305 MB |
+| confirm | 400 | 200 | 10 | 190 | 3.2 | 69.6 | 8.7 | 262% | 212% | 19% | - | 120% | 238 MB |
+
+Stock check: 336477 tickets taken from the hot zone, 336477 in orders.
+
+Requests answered by each instance since it started: 1119686.
+
+**Highest rate without breaking: 1792 req/s**, with 400 requests open, p95 476 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 400** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 01:54:18.
+
+**Side by side** (pass 1 / pass 2; off = platform threads, on = virtual threads)
+
+| open requests | req/s, off | req/s, on | p95 ms, off | p95 ms, on | read p95 ms, off | read p95 ms, on | booking p95 ms, off | booking p95 ms, on |
+|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 200 | 1241 / 1446 | 1558 / 1349 | 669 / 456 | 436 / 570 | 249 / 185 | 167 / 233 | 1134 / 970 | 811 / 1033 |
+| 400 | 1782 / 1792 | 1835 / 1697 | 477 / 476 | 697 / 747 | 304 / 295 | 268 / 313 | 860 / 761 | 1124 / 1262 |
+| 800 | 1406 / 1552 | 1695 / 1238 | 1437 / 1285 | 1503 / 2121 | 1251 / 1138 | 666 / 713 | 2069 / 1880 | 2720 / 7957 |
+| 1600 | 1486 / 1758 | 1809 / 1530 | 2862 / 1635 | 2855 / 3553 | 2719 / 1449 | 1061 / 1233 | 3531 / 2035 | 3749 / 10000 |
+
+- No difference in requests per second that these runs can show.
+- Virtual threads: reads were faster at 800 and 1600 open requests in both passes; the p95 of bookings was higher at 400
+  and 800 in both passes.
+- Platform threads: no failed request. Virtual threads: 1 timeout in pass 1 (1600), and in pass 2 13 timeouts at 800 and
+  1,521 (1.66%) at 1600.
+- The database stalled twice during `vton-2` (01:37 and 01:39: 24 statements of 1 to 5 s, three of them `COMMIT`), and
+  `vtoff-2` logged 20 such statements at 01:41 to 01:42. The failures of `vton-2` therefore cannot be put down to virtual
+  threads alone. The cause of the stalls was not isolated.
+- With virtual threads every open request is inside the application and waits for a connection there (up to 1,663 waiting,
+  against 190). A booking takes a connection at least three times (claim the idempotency key, the booking, store the
+  response), which would explain the slower bookings; this was not measured separately.
+- No pinned thread trace in any log.
+- 1,247,250 bookings in the four runs; the stock matched the orders after each. No `ERROR` line or deadlock in the logs.
+
+### Run 22: trials of seat bookings; one very large zone slowed every event detail
+
+- **When:** 07:22 to 07:38, an IDE and a web browser open, 15 s per level: **only the failure of the first trial says
+  anything about speed**
+- **Command:** `SEATED_SHARE=0.5 APP_CPUS=4 DB_CPUS=4 ROUNDS=1 LEVELS="20 50" LEVEL_SECONDS=15 loadtest/run.sh concurrency`
+- **Code:** commit 37618ae with uncommitted changes: the seat lookup of the booking reads only the requested seats, and
+  the new `SEATED_SHARE` setting of `loadtest/`
+
+#### first trial: all 600,000 seats of the hall in one zone
+
+- Commit 37618ae with uncommitted changes in src or pom.xml
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 20 50; 15s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+- Bookings: 50% take one numbered seat, 50% one standing ticket; a hall of 600000 seats is seeded
+
+##### Round 1, started 07:23:31
+
+Warm-up, not counted: 2 runs at 50 requests at once, req/s 52 56.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 20 | 49 | 402 | 969 | 1208 | 964 | 972 | 0% | 0 | 20 | slow |
+| ladder | 50 | 56 | 897 | 2461 | 3043 | 1596 | 2859 | 0% | 0 | 50 | slow |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 20 | 20 | 10 | 11 | 130.8 | 123.3 | 10.0 | 45% | 392% | 4% | - | 8% | 74 MB |
+| ladder | 50 | 50 | 10 | 40 | 108.1 | 432.5 | 9.9 | 46% | 394% | 4% | - | 9% | 83 MB |
+
+Bookings by kind (counts and p95 of the measured part).
+
+| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |
+|---|--:|--:|--:|--:|--:|
+| ladder | 20 | 109 | 1034 | 126 | 889 |
+| ladder | 50 | 143 | 2785 | 119 | 3060 |
+
+Stock check: 829 tickets taken from the hot zone, 829 in orders.
+Seat check: 793 seats of the hall held, 793 in orders, 0 not held by their order; seats used up to number 1814 of 600000.
+
+Requests answered by each instance since it started: 5356.
+
+**Highest rate without breaking: 56 req/s**, with 50 requests open, p95 2461 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 0** (held for 15s: no).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 07:25:23.
+
+- The database used 392 to 394% of its 4 CPUs and the whole application did about 50 requests per second, reads included.
+  The slow statements (16 over 1 s) were the count of free seats behind `GET /events/{id}`
+  (`countAvailableByEventId`), for events that have 100 seats.
+- `EXPLAIN ANALYZE` for such an event: a parallel sequential scan of the whole seat table, 32 ms. With the same seats
+  spread over 600 zones of 1,000 (changed in a transaction and rolled back): index scans, 0.1 to 0.4 ms. The likely reason is
+  that one huge zone makes the planner expect every zone to be large.
+- The seed was changed to spread the hall over 600 zones. **The query of the application was not changed**, and no fix
+  for it was verified.
+- Later trials with the new seed: no failed request, stock and seats matched the orders. On such a stack the same
+  statement, typed with the event id taken from a subquery, was still planned as a sequential scan (37 ms); the
+  application's requests were not: a later trial counted 12 scans of the whole seat table in all.
+
+### Run 23: standing tickets only against standing tickets and seats
+
+- **When:** 07:39 to 08:24, on mains power; platform profile `balanced-performance`, energy preference
+  `balance_performance`, the same at the start and the end; the IDE and the web browser closed
+- **Command:** `SEATED_SHARE=<0.5|0> HOT_SEATS=600000 APP_CPUS=4 DB_CPUS=4 ROUNDS=1 LEVELS="100 150" LEVEL_SECONDS=60
+  CONFIRM=60 WARM_MIN=5 WARM_MAX=6 loadtest/run.sh concurrency`, order mixed, standing, standing, mixed
+- **Code:** as run 22; the same seed (hall of 600,000 seats in 600 zones) in all four runs
+
+**CPU clock** (mean of all cores, sampled every 15 s over the whole run) and the application container's memory:
+
+| run | mean MHz | samples under 1.2 GHz | samples over 2.5 GHz | mean °C | highest °C | highest app memory |
+|---|--:|--:|--:|--:|--:|--:|
+| mixed-1 | 2386 | 35% | 57% | 63 | 79 | 743 MiB |
+| standing-1 | 2146 | 38% | 45% | 63 | 75 | 684 MiB |
+| standing-2 | 2228 | 37% | 46% | 63 | 76 | 721 MiB |
+| mixed-2 | 2489 | 26% | 61% | 64 | 83 | 906 MiB |
+
+#### mixed-1
+
+- Commit 37618ae with uncommitted changes in src or pom.xml
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 100 150; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+- Bookings: 50% take one numbered seat, 50% one standing ticket; a hall of 600000 seats is seeded
+
+##### Round 1, started 07:39:28
+
+Warm-up, not counted: 5 runs at 50 requests at once, req/s 213 470 1896 2317 2324.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 100 | 2063 | 48 | 154 | 342 | 65 | 301 | 0% | 0 | 99 | good |
+| ladder | 150 | 2233 | 67 | 216 | 409 | 90 | 350 | 0% | 0 | 149 | good |
+| confirm | 150 | 2009 | 74 | 253 | 505 | 105 | 465 | 0% | 0 | 149 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 100 | 100 | 10 | 90 | 2.6 | 26.4 | 8.1 | 344% | 225% | 19% | - | 135% | 137 MB |
+| ladder | 150 | 150 | 10 | 140 | 2.3 | 38.3 | 8.0 | 371% | 245% | 20% | - | 144% | 154 MB |
+| confirm | 150 | 150 | 10 | 140 | 2.7 | 43.7 | 8.2 | 351% | 229% | 20% | - | 135% | 150 MB |
+
+Bookings by kind (counts and p95 of the measured part).
+
+| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |
+|---|--:|--:|--:|--:|--:|
+| ladder | 100 | 18576 | 288 | 18655 | 314 |
+| ladder | 150 | 20086 | 341 | 20200 | 358 |
+| confirm | 150 | 18139 | 446 | 18153 | 482 |
+
+Stock check: 136956 tickets taken from the hot zone, 136956 in orders.
+Scans of the whole seat table since the database was created: 9.
+Seat check: 137066 seats of the hall held, 137066 in orders, 0 not held by their order; seats used up to number 181986 of 600000.
+
+Requests answered by each instance since it started: 912183.
+
+**Highest rate without breaking: 2233 req/s**, with 150 requests open, p95 216 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 150** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 07:49:37.
+
+#### standing-1
+
+- Commit 37618ae with uncommitted changes in src or pom.xml
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 100 150; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+- Bookings: 0% take one numbered seat, 100% one standing ticket; a hall of 600000 seats is seeded
+
+##### Round 1, started 07:50:13
+
+Warm-up, not counted: 6 runs at 50 requests at once, req/s 205 1148 1776 1628 1455 1684.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 100 | 1772 | 56 | 164 | 423 | 55 | 271 | 0% | 0 | 99 | good |
+| ladder | 150 | 1445 | 103 | 333 | 841 | 131 | 774 | 0% | 0 | 149 | good |
+| confirm | 150 | 1556 | 96 | 285 | 785 | 125 | 720 | 0% | 0 | 150 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 100 | 100 | 10 | 90 | 3.2 | 31.6 | 8.7 | 289% | 210% | 18% | - | 111% | 136 MB |
+| ladder | 150 | 150 | 10 | 140 | 4.0 | 61.7 | 8.7 | 254% | 178% | 16% | - | 105% | 145 MB |
+| confirm | 150 | 150 | 10 | 140 | 3.7 | 57.9 | 8.8 | 267% | 192% | 18% | - | 109% | 144 MB |
+
+Bookings by kind (counts and p95 of the measured part).
+
+| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |
+|---|--:|--:|--:|--:|--:|
+| ladder | 100 | 0 | 0 | 31923 | 271 |
+| ladder | 150 | 0 | 0 | 26090 | 774 |
+| confirm | 150 | 0 | 0 | 27877 | 720 |
+
+Stock check: 255103 tickets taken from the hot zone, 255103 in orders.
+Scans of the whole seat table since the database was created: 12.
+Seat check: 0 seats of the hall held, 0 in orders, 0 not held by their order; seats used up to number 0 of 600000.
+
+Requests answered by each instance since it started: 848774.
+
+**Highest rate without breaking: 1772 req/s**, with 100 requests open, p95 164 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 150** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 08:01:27.
+
+#### standing-2
+
+- Commit 37618ae with uncommitted changes in src or pom.xml
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 100 150; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+- Bookings: 0% take one numbered seat, 100% one standing ticket; a hall of 600000 seats is seeded
+
+##### Round 1, started 08:02:04
+
+Warm-up, not counted: 6 runs at 50 requests at once, req/s 208 1179 1383 1766 1425 1795.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 100 | 1618 | 61 | 180 | 488 | 67 | 441 | 0% | 0 | 99 | good |
+| ladder | 150 | 1777 | 84 | 252 | 602 | 87 | 508 | 0% | 0 | 150 | good |
+| confirm | 150 | 1792 | 83 | 243 | 621 | 85 | 452 | 0% | 0 | 149 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 100 | 100 | 10 | 90 | 3.5 | 34.8 | 8.8 | 271% | 200% | 18% | - | 108% | 130 MB |
+| ladder | 150 | 150 | 10 | 140 | 3.2 | 49.8 | 8.4 | 267% | 197% | 18% | - | 114% | 151 MB |
+| confirm | 150 | 150 | 10 | 140 | 3.1 | 49.6 | 8.7 | 286% | 207% | 19% | - | 114% | 152 MB |
+
+Bookings by kind (counts and p95 of the measured part).
+
+| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |
+|---|--:|--:|--:|--:|--:|
+| ladder | 100 | 0 | 0 | 29131 | 441 |
+| ladder | 150 | 0 | 0 | 32022 | 508 |
+| confirm | 150 | 0 | 0 | 32305 | 452 |
+
+Stock check: 259524 tickets taken from the hot zone, 259524 in orders.
+Scans of the whole seat table since the database was created: 117.
+Seat check: 0 seats of the hall held, 0 in orders, 0 not held by their order; seats used up to number 0 of 600000.
+
+Requests answered by each instance since it started: 865255.
+
+**Highest rate without breaking: 1792 req/s**, with 150 requests open, p95 243 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 150** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 08:13:19.
+
+#### mixed-2
+
+- Commit 37618ae with uncommitted changes in src or pom.xml
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 100 150; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+- Bookings: 50% take one numbered seat, 50% one standing ticket; a hall of 600000 seats is seeded
+
+##### Round 1, started 08:13:54
+
+Warm-up, not counted: 5 runs at 50 requests at once, req/s 185 409 1987 2017 2002.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 100 | 1894 | 52 | 185 | 351 | 72 | 317 | 0% | 0 | 99 | good |
+| ladder | 150 | 2170 | 69 | 225 | 426 | 93 | 372 | 0% | 0 | 149 | good |
+| confirm | 150 | 2230 | 67 | 213 | 449 | 91 | 391 | 0% | 0 | 149 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 100 | 100 | 10 | 90 | 2.9 | 29.1 | 8.3 | 361% | 236% | 21% | - | 135% | 136 MB |
+| ladder | 150 | 150 | 10 | 140 | 2.4 | 39.3 | 8.1 | 380% | 243% | 21% | - | 141% | 154 MB |
+| confirm | 150 | 150 | 10 | 140 | 2.4 | 39.0 | 8.1 | 363% | 238% | 20% | - | 144% | 163 MB |
+
+Bookings by kind (counts and p95 of the measured part).
+
+| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |
+|---|--:|--:|--:|--:|--:|
+| ladder | 100 | 16814 | 304 | 16896 | 331 |
+| ladder | 150 | 19488 | 369 | 19723 | 375 |
+| confirm | 150 | 20132 | 367 | 20096 | 413 |
+
+Stock check: 129696 tickets taken from the hot zone, 129696 in orders.
+Scans of the whole seat table since the database was created: 9.
+Seat check: 129145 seats of the hall held, 129145 in orders, 0 not held by their order; seats used up to number 170208 of 600000.
+
+Requests answered by each instance since it started: 863624.
+
+**Highest rate without breaking: 2230 req/s**, with 150 requests open, p95 213 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 150** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 08:24:02.
+
+**Side by side** (pass 1 / pass 2; mixed = half of the bookings take one seat, half one standing ticket)
+
+| level | req/s, mixed | req/s, standing | p95 ms, mixed | p95 ms, standing | booking p95 ms, mixed | booking p95 ms, standing |
+|---|--:|--:|--:|--:|--:|--:|
+| 100 | 2063 / 1894 | 1772 / 1618 | 154 / 185 | 164 / 180 | 301 / 317 | 271 / 441 |
+| 150 | 2233 / 2170 | 1445 / 1777 | 216 / 225 | 333 / 252 | 350 / 372 | 774 / 508 |
+| 150, held again | 2009 / 2230 | 1556 / 1792 | 253 / 213 | 285 / 243 | 465 / 391 | 720 / 452 |
+
+- All six measurements of the mixed bookings gave more requests per second (1,894 to 2,233) than all six of standing
+  tickets only (1,445 to 1,792). No request failed or timed out.
+- With mixed bookings a connection was held 2.3 to 2.9 ms (standing only: 3.1 to 4.0), and both the application and the
+  database got more CPU time. The likely reason is that only half of the bookings queue on the one counter row (compare
+  run 20). It was not isolated: the clock was also higher in the mixed runs, which may be an effect of doing more work.
+- Seat and standing bookings took about the same time within a mixed run (p95 288 to 446 ms against 314 to 482).
+- Not covered: each seat request asks for its own seat, so buyers never compete for a seat; one seat per order; the seat
+  map is not read; levels 50 and 200 were not measured.
+- 1,047,490 bookings in the four runs (266,211 of them seats). Stock and seats matched the orders after each run, and no
+  seat was in two live orders. No `ERROR` line, deadlock or connection timeout in the logs.
+- `standing-2` counted 117 scans of the whole seat table (the others 9 to 12). Their source was not looked into; they are
+  few against some 860,000 requests.
+
+### Run 24: standing tickets and seats at 200 and 300 requests open, three passes
+
+- **When:** 08:28 to 09:04, on mains power; CPU settings as in run 23, the same at the start and the end; the IDE and the
+  web browser closed
+- **Command:** as the mixed runs of run 23 with `LEVELS="200 300"`, three passes
+- **Code:** as run 22
+- **Mark, set before the runs:** a level is claimed only if every measurement of it in all three passes has no failed
+  request and a p95 under 500 ms (under 350 ms to keep the figure claimed so far for 150)
+
+**CPU clock** (sampled as in run 23):
+
+| run | mean MHz | samples under 1.2 GHz | samples over 2.5 GHz | mean °C | highest °C | highest app memory |
+|---|--:|--:|--:|--:|--:|--:|
+| mixed200-1 | 2343 | 35% | 54% | 63 | 79 | 735 MiB |
+| mixed200-2 | 2340 | 38% | 57% | 63 | 79 | 751 MiB |
+| mixed200-3 | 1799 | 49% | 27% | 61 | 78 | 900 MiB |
+
+#### mixed200-1
+
+- Commit 37618ae with uncommitted changes in src or pom.xml
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 200 300; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+- Bookings: 50% take one numbered seat, 50% one standing ticket; a hall of 600000 seats is seeded
+
+##### Round 1, started 08:29:07
+
+Warm-up, not counted: 6 runs at 50 requests at once, req/s 193 414 1844 2250 2480 2276.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 200 | 1917 | 104 | 377 | 676 | 145 | 614 | 0% | 0 | 199 | good |
+| ladder | 300 | 1734 | 172 | 575 | 903 | 288 | 841 | 0% | 0 | 298 | slow |
+| between | 250 | 1984 | 126 | 386 | 770 | 200 | 699 | 0% | 0 | 249 | good |
+| confirm | 250 | 1980 | 126 | 390 | 758 | 198 | 692 | 0% | 0 | 249 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 200 | 200 | 10 | 190 | 2.8 | 62.1 | 8.3 | 340% | 234% | 19% | - | 137% | 169 MB |
+| ladder | 300 | 200 | 10 | 190 | 3.1 | 67.3 | 8.2 | 323% | 205% | 19% | - | 138% | 209 MB |
+| between | 250 | 200 | 10 | 190 | 2.7 | 60.8 | 8.4 | 356% | 226% | 21% | - | 141% | 192 MB |
+| confirm | 250 | 200 | 10 | 191 | 2.7 | 61.2 | 8.3 | 339% | 232% | 20% | - | 139% | 192 MB |
+
+Bookings by kind (counts and p95 of the measured part).
+
+| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |
+|---|--:|--:|--:|--:|--:|
+| ladder | 200 | 17224 | 593 | 17289 | 638 |
+| ladder | 300 | 15914 | 813 | 15664 | 861 |
+| between | 250 | 17819 | 678 | 17995 | 721 |
+| confirm | 250 | 17779 | 661 | 17822 | 718 |
+
+Stock check: 173009 tickets taken from the hot zone, 173009 in orders.
+Scans of the whole seat table since the database was created: 10.
+Seat check: 174102 seats of the hall held, 174102 in orders, 0 not held by their order; seats used up to number 238467 of 600000.
+
+Requests answered by each instance since it started: 1155598.
+
+**Highest rate without breaking: 1984 req/s**, with 250 requests open, p95 386 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 250** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 08:41:49.
+
+#### mixed200-2
+
+- Commit 37618ae with uncommitted changes in src or pom.xml
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 200 300; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+- Bookings: 50% take one numbered seat, 50% one standing ticket; a hall of 600000 seats is seeded
+
+##### Round 1, started 08:42:25
+
+Warm-up, not counted: 5 runs at 50 requests at once, req/s 184 382 1942 2300 2274.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 200 | 2054 | 97 | 325 | 628 | 137 | 571 | 0% | 0 | 198 | good |
+| ladder | 300 | 1983 | 151 | 435 | 796 | 248 | 726 | 0% | 0 | 298 | good |
+| confirm | 300 | 1948 | 153 | 457 | 806 | 262 | 745 | 0% | 0 | 299 | good |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 200 | 200 | 10 | 191 | 2.5 | 56.5 | 8.0 | 345% | 231% | 19% | - | 136% | 170 MB |
+| ladder | 300 | 200 | 10 | 190 | 2.7 | 60.0 | 8.1 | 335% | 215% | 20% | - | 142% | 209 MB |
+| confirm | 300 | 200 | 10 | 190 | 2.8 | 62.3 | 8.4 | 354% | 225% | 21% | - | 141% | 211 MB |
+
+Bookings by kind (counts and p95 of the measured part).
+
+| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |
+|---|--:|--:|--:|--:|--:|
+| ladder | 200 | 18547 | 555 | 18535 | 588 |
+| ladder | 300 | 18131 | 709 | 17831 | 744 |
+| confirm | 300 | 17535 | 712 | 17633 | 773 |
+
+Stock check: 131561 tickets taken from the hot zone, 131561 in orders.
+Scans of the whole seat table since the database was created: 9.
+Seat check: 131410 seats of the hall held, 131410 in orders, 0 not held by their order; seats used up to number 179851 of 600000.
+
+Requests answered by each instance since it started: 874055.
+
+**Highest rate without breaking: 2054 req/s**, with 200 requests open, p95 325 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 300** (held for 60s: yes).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 08:52:28.
+
+#### mixed200-3
+
+- Commit 37618ae with uncommitted changes in src or pom.xml
+- 12th Gen Intel(R) Core(TM) i5-12450HX, 12 threads; 1 x app 4 CPU / 2 GB, PostgreSQL 4 CPU / 1 GB, Redis 1 CPU; pool 10; virtual threads false
+- k6 v2.0.0 on the same machine
+- Other containers running during the test: none
+- Traffic: 70% reads, 30% bookings; every client sends its next request when the answer arrives; levels: 200 300; 60s each after 10s of arriving
+- Marks: good = p95 < 500 ms and < 1% failed; broken = 1% or more failed (a request times out after 10 s)
+- Bookings: 50% take one numbered seat, 50% one standing ticket; a hall of 600000 seats is seeded
+
+##### Round 1, started 08:53:03
+
+Warm-up, not counted: 6 runs at 50 requests at once, req/s 189 390 1510 2178 1636 2017.
+
+| run | open requests | req/s | avg ms | p95 ms | p99 ms | read p95 | book p95 | failed | timeouts | req/s x avg | mark |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|---|
+| ladder | 200 | 2267 | 88 | 283 | 526 | 111 | 458 | 0% | 0 | 199 | good |
+| ladder | 300 | 2092 | 144 | 336 | 854 | 174 | 640 | 0% | 0 | 302 | good |
+| confirm | 300 | 1461 | 205 | 726 | 1207 | 352 | 980 | 0% | 0 | 299 | slow |
+
+Server side (CPU: 100% = one core; connections: pool of 10 per instance, figures added up over 1).
+
+| run | open requests | busy threads (max) | connections in use (max) | waiting for one (max) | held ms | waited ms | connections busy on average | app CPU | db CPU | redis CPU | nginx CPU | k6 CPU | k6 RAM |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| ladder | 200 | 200 | 10 | 190 | 2.3 | 52.1 | 8.1 | 390% | 250% | 22% | - | 142% | 178 MB |
+| ladder | 300 | 200 | 10 | 190 | 2.6 | 58.3 | 8.3 | 342% | 221% | 20% | - | 138% | 212 MB |
+| confirm | 300 | 200 | 10 | 190 | 3.9 | 83.3 | 8.8 | 299% | 202% | 19% | - | 127% | 201 MB |
+
+Bookings by kind (counts and p95 of the measured part).
+
+| run | open requests | seat bookings | seat p95 | standing bookings | standing p95 |
+|---|--:|--:|--:|--:|--:|
+| ladder | 200 | 20560 | 442 | 20305 | 482 |
+| ladder | 300 | 18611 | 604 | 18862 | 680 |
+| confirm | 300 | 13184 | 949 | 13187 | 1011 |
+
+Stock check: 139251 tickets taken from the hot zone, 139251 in orders.
+Scans of the whole seat table since the database was created: 10.
+Seat check: 139177 seats of the hall held, 139177 in orders, 0 not held by their order; seats used up to number 187745 of 600000.
+
+Requests answered by each instance since it started: 927602.
+
+**Highest rate without breaking: 2267 req/s**, with 200 requests open, p95 283 ms.
+**Most requests open at once with p95 < 500 ms and < 1% failed: 300** (held for 60s: no).
+**Never broke; the highest level tried is in the table.**
+Round 1 ended 09:04:15.
+
+**The three passes together**
+
+| open requests | measurements | req/s | p95 ms, all requests | p95 ms, bookings only |
+|--:|--:|--:|--:|--:|
+| 200 | 3 | 1917 / 2054 / 2267 | 377 / 325 / 283 | 614 / 571 / 458 |
+| 250 | 2 (pass 1) | 1984, 1980 | 386, 390 | 699, 692 |
+| 300 | 5 | 1734; 1983, 1948; 2092, 1461 | 575; 435, 457; 336, 726 | 841; 726, 745; 640, 980 |
+
+- 200 meets the 500 ms mark in all three passes, not the 350 ms one (pass 1: 377 ms). 300 does not meet it (two of five
+  measurements over 500 ms).
+- No request failed or timed out in any level.
+- The slowest measurement (pass 3, 300 held again, 09:03 to 09:04) coincides with a low CPU clock: the three samples
+  inside it read 1.1 to 1.7 GHz. The database logged 12 statements over 1 s in pass 3 (`COMMIT` and the update of the
+  counter row, at 08:59 during the warm-up and at 09:02 at the end of the first 300 level), none during the slowest
+  measurement. The cause of the stalls was not isolated.
+- 888,510 bookings in the three runs (444,689 of them seats). Stock and seats matched the orders after each run, and no
+  seat was in two live orders. No `ERROR` line, deadlock or connection timeout in the logs.

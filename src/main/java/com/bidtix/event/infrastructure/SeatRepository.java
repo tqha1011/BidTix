@@ -19,6 +19,15 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
             "from Seat s " +
             "where s.status = 'AVAILABLE' and s.zone.id = :zoneId " +
             "and s.heldByOrderId is null " +
+            "and s.publicId in :publicIds " +
+            "order by s.id")
+    List<Seat> findAvailableSeatRequestByTicketZoneIdAndPublicIds(Long zoneId, Set<UUID> publicIds);
+
+    /** Every free seat of the zone; the dev seed takes the first few. */
+    @Query("select s " +
+            "from Seat s " +
+            "where s.status = 'AVAILABLE' and s.zone.id = :zoneId " +
+            "and s.heldByOrderId is null " +
             "order by s.id")
     List<Seat> findAllAvailableSeatByTicketZoneId(Long zoneId);
 
