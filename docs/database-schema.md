@@ -29,6 +29,7 @@ Version numbers are global across modules, so a new migration always takes the n
 | V17 | `payment` | `payments.refund_requested_at` (the claim on a refund) |
 | V18 | `payment` | `payments.refund_attempts`, `payments.refund_next_attempt_at` (retrying a refund request) |
 | V19 | `payment` | `payments.refund_queries`, `payments.refund_next_query_at` (asking about a requested refund) |
+| V20 | `event` | `events.cancelled_at`, `events.auctions_cleaned_at`, `events.orders_cleaned_at` (cleaning up a cancelled event) |
 
 ## Conventions
 
@@ -68,6 +69,8 @@ users ──< idempotency_keys
 
 **event**
 - `events`: `ends_at > starts_at`, the sale window must close before the show (`sale_ends_at <= starts_at`).
+- `events.cancelled_at` is set with the status `CANCELLED`. `auctions_cleaned_at` and `orders_cleaned_at` are `NULL`
+  until the auction and the booking job have nothing left to do for the cancelled event.
 - `ticket_zones`: `SEATED` or `GENERAL_ADMISSION`. Only GA zones have `available_quantity`, with
   `0 <= available_quantity <= capacity` enforced by a `CHECK`, so a GA zone can never be oversold.
 - `seats`: `AVAILABLE` / `HELD` / `SOLD` / `RESERVED_FOR_AUCTION`. A `HELD` seat always has
@@ -75,7 +78,7 @@ users ──< idempotency_keys
 
 **booking**
 - `orders.source` is `BOOKING` or `AUCTION`. Status: `PENDING_PAYMENT → PAID | EXPIRED | CANCELLED`,
-  `PAID → REFUNDED`. `paid_at` is required once paid.
+  `PAID → REFUNDED`, or `PAID → CANCELLED` when the event is cancelled. `paid_at` is required once paid.
 - `orders.order_code`: `VARCHAR(20)`, `NOT NULL`, `UNIQUE`, shape `ORDER_<digits>`. The unique constraint is
   the safety net, so code generation must cope with a collision (retry), especially under concurrent orders.
 - `order_items.unit_price` is a price snapshot. A seated item always has `quantity = 1`.
@@ -98,6 +101,7 @@ users ──< idempotency_keys
   the same order is stored as `REFUND_PENDING`, as is one that arrives after the order expired or was cancelled.
 - A payment moves `PENDING → SUCCEEDED | FAILED | REFUND_PENDING`, then `REFUND_PENDING → REFUNDED`, set only when
   VNPAY's querydr reports the full refund as successful. `provider_txn_id` is not stored for a failed transaction.
+  Cancelling an event also moves the `SUCCEEDED` payments of its orders to `REFUND_PENDING`.
 - `payment_webhook_events` is an inbox: every callback with a valid signature, one row per
   `UNIQUE (provider, provider_event_id)` (VNPAY: `vnp_TxnRef:vnp_TransactionStatus`), with the payload.
   `processed_at` is set in the transaction that records the result; a row without it is still unhandled. A repeat adds

@@ -41,6 +41,17 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
 
 
     /**
+     * The order's paid payment now waits for a refund: SUCCEEDED -&gt; REFUND_PENDING. At most one payment of an order is
+     * SUCCEEDED ({@code ux_payments_one_succeeded_per_order}), so the row count is 1, or 0 when there is none.
+     */
+    @Modifying
+    @Query("update Payment p set p.status = com.bidtix.payment.domain.PaymentStatus.REFUND_PENDING, "
+            + "p.failureReason = :reason, p.updatedAt = :now, p.version = p.version + 1 "
+            + "where p.orderId = :orderId and p.status = com.bidtix.payment.domain.PaymentStatus.SUCCEEDED")
+    int markRefundPendingByOrderId(@Param("orderId") long orderId, @Param("reason") String reason,
+                                   @Param("now") Instant now);
+
+    /**
      * Takes a REFUND_PENDING payment to be refunded, with one conditional UPDATE. 1 means this caller took it and may
      * ask the provider, after the transaction has committed; 0 means somebody else already did, or it does not wait for
      * a refund. It counts the attempt. Only {@link #releaseRefundClaim} takes the mark away again.

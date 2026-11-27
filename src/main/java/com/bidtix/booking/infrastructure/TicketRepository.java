@@ -7,12 +7,21 @@ import com.bidtix.booking.dtos.MyTicketResponse;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
+import java.time.Instant;
 import java.util.Collection;
 import java.util.UUID;
 
 public interface TicketRepository extends JpaRepository<Ticket, Long> {
+
+    /** All VALID tickets of an order -&gt; CANCELLED, in one statement. A USED ticket is not touched: check the row count. */
+    @Modifying
+    @Query("update Ticket t set t.status = TicketStatus.CANCELLED, t.updatedAt = :now " +
+            "where t.order.id = :orderId and t.status = TicketStatus.VALID")
+    int cancelValidTickets(@Param("orderId") long orderId, @Param("now") Instant now);
 
     /**
      * Read model for the admin list. Tickets point at zones, seats and users only by id (other modules), so

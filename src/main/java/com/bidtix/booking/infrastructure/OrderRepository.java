@@ -130,4 +130,66 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             order by i.id
             """)
     List<OrderItemResponse> findItemViews(@Param("orderCode") String orderCode);
+
+    /**
+     * Ids of up to {@code limit} unpaid booking orders of cancelled events whose orders are not cleaned up yet, with id
+     * greater than {@code lastId}, lowest first. A plain read, no lock ({@link #lockPendingBookingOrders}).
+     */
+    @Query("select o.id " +
+            "from Order o join Event e on e.id = o.eventId " +
+            "where o.status = OrderStatus.PENDING_PAYMENT and o.source = OrderSource.BOOKING " +
+            "and e.status = EventStatus.CANCELLED and e.ordersCleanedAt is null " +
+            "and o.id > :lastId " +
+            "order by o.id asc " +
+            "limit :limit")
+    List<Long> findOrderPendingPaymentOfCancelledEvent(@Param("limit") int limit, @Param("lastId") Long lastId);
+
+    /**
+     * Like {@link #findOrderPendingPaymentOfCancelledEvent}, for the paid orders (booking and auction) of cancelled
+     * events, whose money has to be given back whatever their deadline was.
+     */
+    @Query("select o.id from Order o " +
+            "join Event e on e.id = o.eventId " +
+            "where o.status = OrderStatus.PAID and e.status = EventStatus.CANCELLED and e.ordersCleanedAt is null " +
+            "and o.id > :lastId " +
+            "order by o.id asc " +
+            "limit :limit")
+    List<Long> findOrderNeedsToRefund(@Param("limit") int limit, @Param("lastId") Long lastId);
+
+
+    /**
+     * Locks those of these orders that are still unpaid booking orders, lowest id first. {@code SKIP LOCKED}: an order
+     * another job or a payment holds is left out instead of waited for. No deadline: this is for orders of a cancelled
+     * event, which are cancelled at once. Call it inside a transaction.
+     */
+    @Query(value = "select id from orders where id in (:ids) and status = 'PENDING_PAYMENT' and source = 'BOOKING' " +
+            "order by id for update skip locked", nativeQuery = true)
+    List<Long> lockPendingBookingOrders(@Param("ids") List<Long> ids);
+
+
+    /**
+     * Locks one order, only if it is still PAID. {@code SKIP LOCKED}: empty when another job holds it. Call it inside a
+     * transaction.
+     */
+    @Query(value = "select * from orders where id = :id and status = 'PAID' for update skip locked", nativeQuery = true)
+    Optional<Order> lockPaidOrder(@Param("id") long id);
+
+    /**
+     * PAID -&gt; CANCELLED, for an order whose money is being given back ({@code paid_at} stays). The caller MUST check the
+     * returned row count (1 = changed).
+     */
+    @Modifying
+    @Query("update Order o set o.status = OrderStatus.CANCELLED, o.version = o.version + 1, o.updatedAt = :now " +
+            "where o.id = :orderId and o.status = OrderStatus.PAID")
+    int markPaidOrderCancelled(@Param("orderId") long orderId, @Param("now") Instant now);
+
+    /**
+     * Cancelled events whose orders are not marked cleaned up yet, were cancelled at or before {@code cancelledBefore},
+     * whose auctions are already cleaned up, and that have no order left that is unpaid or paid, booking or auction.
+     */
+    @Query("select e.id from Event e where e.status = EventStatus.CANCELLED and e.ordersCleanedAt is null " +
+            "and e.auctionsCleanedAt is not null and e.cancelledAt <= :cancelledBefore " +
+            "and not exists (select o.id from Order o where o.eventId = e.id " +
+            "and o.status in (OrderStatus.PENDING_PAYMENT, OrderStatus.PAID))")
+    List<Long> findCancelledEventsWithoutOpenOrders(@Param("cancelledBefore") Instant cancelledBefore);
 }

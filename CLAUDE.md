@@ -35,7 +35,7 @@ seat-hold or payment flow).
 - Tests: JUnit 5, Mockito, MockMvc, Spring Security test, Testcontainers (real Postgres; Docker is
   required to run the integration tests; `PostgresIntegrationTest` also starts a Redis container).
 
-> Status: schema (Flyway V1–V19), JPA entities, the `auth` module, global error handling, Testcontainers
+> Status: schema (Flyway V1–V20), JPA entities, the `auth` module, global error handling, Testcontainers
 > and the booking flow for **SEATED zones** (`BookingService.bookTicket`: hold seats) and **GENERAL_ADMISSION zones**
 > (counter decrement) are done. Booking does not take payment: `POST /api/v1/orders` (CUSTOMER, `OrderController`, 201 with
 > the order, status PENDING_PAYMENT) needs an `Idempotency-Key` header (see **Idempotency**). The customer then pays with
@@ -82,9 +82,11 @@ seat-hold or payment flow).
 > reads fall back to the database and writes are ignored (fail-open).
 > `GET /api/v1/payments/vnpay/return` (public, signed, rate limit `vnpay-return`) shows the state of a payment and changes
 > nothing.
-> Not started: cancelling an event, enforcing `max_tickets_per_user`, ticket check-in, and querying VNPAY for payments left
+> `POST /api/v1/events/{id}/cancel` (ORGANIZER, owner; only PUBLISHED and not started, one conditional UPDATE) cancels
+> an event; what was sold is undone by two jobs (see **Event cancellation**).
+> Not started: enforcing `max_tickets_per_user`, ticket check-in, and querying VNPAY for payments left
 > PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
-> logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (a future cancel) must evict
+> logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (publish, update and cancel do) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES` and `CacheConfig.VENUE_PAGES`
 > (adding one: only `VENUE_PAGES`).
 
@@ -181,6 +183,21 @@ fails rolls back as a whole and is retried one order per transaction, so one bad
 clears the gate flags of the zones and seats that got stock back. Auction orders (`source = 'AUCTION'`) are never touched: the auction
 owns its stock, and returning it here as well would return it twice (`AuctionOfferExpiryJob` cancels those orders). The status is `CANCELLED`, not `EXPIRED` (the enum value is unused).
 Why batches and not one transaction per order: [`docs/benchmarks.md`](docs/benchmarks.md), section "Cancelling unpaid orders".
+
+**Event cancellation** (`EventService.cancel`): the request only sets `status = CANCELLED` and `cancelled_at` and evicts
+the event pages. Two jobs, every 5 s, look for cancelled events (state, not a message), so whatever was running at the
+cancellation is picked up later.
+- `auction/infrastructure/CancelledEventAuctionJob`: SCHEDULED and LIVE auctions (with or without bids) to CANCELLED;
+  for AWAITING_PAYMENT, one transaction each: lock the offer FIRST (as a payment does), cancel the unpaid AUCTION order,
+  expire the offer, cancel the auction. No ticket goes back on sale. Sets `events.auctions_cleaned_at`.
+- `booking/infrastructure/CancelledEventOrderJob`: unpaid booking orders are cancelled in batches with their stock back
+  (`OrderStockReleaser`, shared with `OrderCancellationJob`), without a grace period. Paid orders (booking and auction),
+  one transaction each: order and tickets CANCELLED, payment SUCCEEDED to REFUND_PENDING (`RefundRequestService`, which
+  requires the caller's transaction), every row count checked; their stock is not returned and VNPAY is called only by
+  `RefundPaymentJob`. Sets `events.orders_cleaned_at`.
+A mark is set only when the job has nothing left for the event (orders: also only after the auctions are marked) and
+`cancelled_at` is over 5 minutes old; a marked event is never looked at again. Anything else that can create work for a
+cancelled event must finish within that window or check the event's status.
 
 **Payment flow** (`payment` module; decisions: [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)).
 The module sees orders only through `PayableOrders`, which `booking` implements (`OrderPayment`).
