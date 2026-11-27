@@ -121,4 +121,27 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
             "where a.status = AuctionStatus.AWAITING_PAYMENT and " +
             "a.id = (select o.auction.id from AuctionOffer o where o.orderId = :orderId)")
     int markAuctionSettled(@Param("orderId") Long orderId, @Param("now") Instant now);
+
+    /**
+     * SCHEDULED or LIVE -&gt; CANCELLED for up to {@code limit} auctions of cancelled events, lowest id first, with or
+     * without bids, in one statement: such an auction has nothing else to undo. {@code SKIP LOCKED}: an auction a bid or
+     * the closing job holds is left for a later run. Call it inside a transaction.
+     */
+    @Modifying
+    @Query(value = "update auctions set status = 'CANCELLED', version = version + 1, updated_at = :now " +
+            "where status in ('SCHEDULED', 'LIVE') and id in (" +
+            "select a.id from auctions a join events e on e.id = a.event_id " +
+            "where a.status in ('SCHEDULED', 'LIVE') and e.status = 'CANCELLED' and e.auctions_cleaned_at is null " +
+            "order by a.id limit :limit for update of a skip locked)", nativeQuery = true)
+    int cancelOpenAuctionsOfCancelledEvents(@Param("now") Instant now, @Param("limit") int limit);
+
+    /**
+     * Cancelled events that are not marked yet, were cancelled at or before {@code cancelledBefore}, and have no auction
+     * left that is SCHEDULED, LIVE or AWAITING_PAYMENT.
+     */
+    @Query("select e.id from Event e where e.status = com.bidtix.event.domain.EventStatus.CANCELLED " +
+            "and e.auctionsCleanedAt is null and e.cancelledAt <= :cancelledBefore " +
+            "and not exists (select a.id from Auction a where a.eventId = e.id and a.status in " +
+            "(AuctionStatus.SCHEDULED, AuctionStatus.LIVE, AuctionStatus.AWAITING_PAYMENT))")
+    List<Long> findCancelledEventsWithoutOpenAuctions(@Param("cancelledBefore") Instant cancelledBefore);
 }

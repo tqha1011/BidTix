@@ -47,4 +47,19 @@ public interface AuctionOfferRepository extends JpaRepository<AuctionOffer, Long
     @Query("update AuctionOffer o set o.status = com.bidtix.auction.domain.OfferStatus.ACCEPTED, o.updatedAt = :now " +
             "where o.orderId = :orderId and o.status = com.bidtix.auction.domain.OfferStatus.PENDING and o.expiresAt > :now")
     int markOfferAcceptedByOrderId(@Param("orderId") Long orderId, @Param("now") Instant now);
+
+    /**
+     * Ids of up to {@code limit} PENDING offers of cancelled events not marked yet, with id greater than
+     * {@code afterId}, lowest first, whatever their deadline. A plain read, no lock ({@link #lockPendingOffer}).
+     */
+    @Query("select o.id from AuctionOffer o join Event e on e.id = o.auction.eventId " +
+            "where o.status = com.bidtix.auction.domain.OfferStatus.PENDING " +
+            "and e.status = com.bidtix.event.domain.EventStatus.CANCELLED and e.auctionsCleanedAt is null " +
+            "and o.id > :afterId order by o.id limit :limit")
+    List<Long> findPendingOfferIdsOfCancelledEvents(@Param("afterId") long afterId, @Param("limit") int limit);
+
+    /** Locks one offer, only if it is still PENDING; empty when another transaction holds it. Call it in a transaction. */
+    @Query(value = "select * from auction_offers where id = :id and status = 'PENDING' for update skip locked",
+            nativeQuery = true)
+    Optional<AuctionOffer> lockPendingOffer(@Param("id") long id);
 }
