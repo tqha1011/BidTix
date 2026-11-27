@@ -59,6 +59,18 @@ public class Event extends AuditableEntity {
     @Column(name = "status", nullable = false, length = 20)
     private EventStatus status = EventStatus.DRAFT;
 
+    /** When the event became CANCELLED; null otherwise. */
+    @Column(name = "cancelled_at")
+    private Instant cancelledAt;
+
+    /** When the auction module had nothing left to clean up for this cancelled event; null until then. */
+    @Column(name = "auctions_cleaned_at")
+    private Instant auctionsCleanedAt;
+
+    /** When the booking module had nothing left to clean up for this cancelled event; null until then. */
+    @Column(name = "orders_cleaned_at")
+    private Instant ordersCleanedAt;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;

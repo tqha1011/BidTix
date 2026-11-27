@@ -10,6 +10,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Optional;
@@ -47,4 +48,11 @@ public interface EventRepository extends JpaRepository<Event, Long> {
     @Query("update Event e set e.status = com.bidtix.event.domain.EventStatus.PUBLISHED, e.version = e.version + 1, "
             + "e.updatedAt = :now where e.id = :id and e.status = com.bidtix.event.domain.EventStatus.DRAFT")
     int publish(Long id, Instant now);
+
+
+    @Modifying(clearAutomatically = true)
+    @Query("update Event e " +
+            "set e.status = EventStatus.CANCELLED, e.version = e.version + 1, e.updatedAt = :now, e.cancelledAt = :now " +
+            "where e.id = :id and e.status = EventStatus.PUBLISHED and e.startsAt < :now and e.cancelledAt is null ")
+    int cancelEvent(@Param("id") Long id,@Param("now") Instant now);
 }

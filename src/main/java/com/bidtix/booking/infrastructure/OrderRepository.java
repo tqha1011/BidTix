@@ -130,4 +130,18 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             order by i.id
             """)
     List<OrderItemResponse> findItemViews(@Param("orderCode") String orderCode);
+
+    @Query("select o.id " +
+            "from Order o join Event e on e.id = o.eventId " +
+            "where o.status = OrderStatus.PENDING_PAYMENT and e.status = EventStatus.CANCELLED " +
+            "order by o.id asc " +
+            "limit :limit")
+    List<Long> findOrderPendingPaymentOfCancelledEvent(int limit);
+
+    @Query("select o.id from Order o " +
+            "join Event e on e.id = o.eventId " +
+            "where o.status = OrderStatus.PAID and o.paidAt <= :now and o.expiresAt <= :now " +
+            "order by o.id asc " +
+            "limit :limit")
+    List<Long> findOrderNeedsToRefund(int limit);
 }

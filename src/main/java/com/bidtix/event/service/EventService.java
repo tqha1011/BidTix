@@ -238,6 +238,19 @@ public class EventService {
         }
     }
 
+    @Transactional
+    @CacheEvict(cacheNames = CacheConfig.EVENTS, allEntries = true)
+    public void cancel(UUID organizerPublicId, UUID eventPublicId) {
+        Event event = requireOwner(organizerPublicId, eventRepository.findByPublicIdForUpdate(eventPublicId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND)));
+        if (event.getStatus() != EventStatus.PUBLISHED) {
+            throw new BusinessException(ErrorCode.EVENT_NOT_EDITABLE);
+        }
+        if(eventRepository.cancelEvent(event.getId(), clock.instant()) != 1) {
+            log.warn("The event {} was cancelled", event.getTitle());
+        }
+    }
+
     /** The caller's event. Call it inside a transaction. */
     private Event findOwnEvent(UUID organizerPublicId, UUID eventPublicId) {
         return requireOwner(organizerPublicId, eventRepository.findByPublicId(eventPublicId)
