@@ -117,7 +117,7 @@ class GeneralAdmissionConcurrencyTest extends PostgresIntegrationTest {
                     go.await();
                     try {
                         return new Attempt(quantity, bookingService.bookTicket(
-                                new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user), null);
+                                new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user, UUID.randomUUID().toString()), null);
                     } catch (Throwable t) {
                         return new Attempt(quantity, null, t);
                     }

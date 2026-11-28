@@ -146,7 +146,7 @@ class AdminTicketServiceIntegrationTest extends PostgresIntegrationTest {
         List<UUID> ticketIds = new ArrayList<>();
         for (int i = 0; i < count; i++) {
             var result = bookingService.bookTicket(new BookingTicketRequest(setup.eventId(), setup.zoneId(),
-                    List.of(setup.seatIds().get(i)), null), setup.userIds().get(i));
+                    List.of(setup.seatIds().get(i)), null), setup.userIds().get(i), UUID.randomUUID().toString());
             OrderPayments.pay(payableOrders, jdbc, result.orderCode());   // booking only holds the seat: paying issues the ticket
             ticketIds.addAll(jdbc.queryForList("select t.public_id from tickets t join orders o on o.id = t.order_id "
                     + "where o.order_code = ?", UUID.class, result.orderCode()));

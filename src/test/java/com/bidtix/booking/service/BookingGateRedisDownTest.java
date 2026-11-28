@@ -1,6 +1,7 @@
 package com.bidtix.booking.service;
 
 import com.bidtix.booking.domain.OrderStatus;
+import java.util.UUID;
 import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.service.GeneralAdmissionFixtures.Fixture;
 import com.bidtix.config.exceptions.BusinessException;
@@ -43,11 +44,11 @@ class BookingGateRedisDownTest extends PostgresIntegrationTest {
 
         // standing: a purchase goes through...
         assertThat(bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), f.userIds().get(0)).status())
+                new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), f.userIds().get(0), UUID.randomUUID().toString()).status())
                 .isEqualTo(OrderStatus.PENDING_PAYMENT);
         // ...and the sold-out answer comes from the database (it carries the hint), without the failed flag write breaking it
         assertThatThrownBy(() -> bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), f.userIds().get(1)))
+                new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), f.userIds().get(1), UUID.randomUUID().toString()))
                 .isInstanceOfSatisfying(BusinessException.class, e -> {
                     assertThat(e.getErrorCode()).isEqualTo(ErrorCode.ZONE_SOLD_OUT);
                     assertThat(e.getProperties()).containsEntry("availableQuantity", 1);
@@ -56,10 +57,10 @@ class BookingGateRedisDownTest extends PostgresIntegrationTest {
         // seated: same
         var seat = f.seatedSeatIds().get(0);
         assertThat(bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), f.userIds().get(0)).status())
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), f.userIds().get(0), UUID.randomUUID().toString()).status())
                 .isEqualTo(OrderStatus.PENDING_PAYMENT);
         assertThatThrownBy(() -> bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), f.userIds().get(1)))
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), f.userIds().get(1), UUID.randomUUID().toString()))
                 .isInstanceOfSatisfying(BusinessException.class, e ->
                         assertThat(e.getErrorCode()).isEqualTo(ErrorCode.SEAT_UNAVAILABLE));
     }

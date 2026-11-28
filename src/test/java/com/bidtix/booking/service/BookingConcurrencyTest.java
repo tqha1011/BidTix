@@ -124,7 +124,7 @@ class BookingConcurrencyTest extends PostgresIntegrationTest {
     }
 
     private BaseBookingTicketResult book(Fixture f, UUID userId, List<UUID> seats) {
-        return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), seats, null), userId);
+        return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), seats, null), userId, UUID.randomUUID().toString());
     }
 
     /** Starts every job at the same instant and waits for all of them. */

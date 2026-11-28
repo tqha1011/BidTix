@@ -70,7 +70,7 @@ public class AuctionSettlementService {
     public void openOffer(Auction auction, Bid bid, int rank, Instant now) {
         Instant deadline = now.plus(properties.orderExpirationMinutes(), ChronoUnit.MINUTES);
         Order order = new Order(bid.getBidderId(), auction.getEventId(), GenerateOrderCode.generate(),
-                OrderSource.AUCTION, deadline);
+                OrderSource.AUCTION, deadline,null);
         order.addItem(auction.getZoneId(), auction.getSeatId(), QUANTITY, bid.getAmount());
         orderRepository.saveAndFlush(order);
 

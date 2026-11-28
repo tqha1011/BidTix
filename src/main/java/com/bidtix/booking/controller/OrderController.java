@@ -15,13 +15,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 import java.security.Principal;
 
@@ -65,8 +59,9 @@ public class OrderController {
             description = "Client-made unique key (1 to 64 characters, e.g. a UUID). Retry with the same key and body to get the "
                     + "first response back instead of booking twice.")
     public ResponseEntity<BaseBookingTicketResult> book(@Valid @RequestBody BookingTicketRequest request,
+                                                        @RequestHeader("Idempotency-Key") String idempotencyKey,
                                                         Principal principal) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(bookingService.bookTicket(request, CurrentUser.publicId(principal)));
+                .body(bookingService.bookTicket(request, CurrentUser.publicId(principal), idempotencyKey));
     }
 }

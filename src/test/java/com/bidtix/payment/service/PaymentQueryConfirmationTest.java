@@ -159,7 +159,7 @@ class PaymentQueryConfirmationTest extends PostgresIntegrationTest {
     private Attempt standingAttempt(int quantity) {
         Fixture f = GeneralAdmissionFixtures.create(em, tx, 10, 1);
         UUID user = f.userIds().get(0);
-        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user)
+        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user, UUID.randomUUID().toString())
                 .orderCode();
         String url = service.createUrlPayment(code, user, "203.0.113.7");
         String txnRef = UriComponentsBuilder.fromUriString(url).build().getQueryParams().getFirst("vnp_TxnRef");

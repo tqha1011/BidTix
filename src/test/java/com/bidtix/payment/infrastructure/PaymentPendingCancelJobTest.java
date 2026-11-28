@@ -78,7 +78,7 @@ class PaymentPendingCancelJobTest extends PostgresIntegrationTest {
     void aPaidPayment_ofAnOrderStillWaiting_issuesTheTickets() {
         Fixture f = GeneralAdmissionFixtures.create(em, transactionTemplate, 10, 1);
         UUID user = f.userIds().get(0);
-        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), user)
+        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, 2), user, UUID.randomUUID().toString())
                 .orderCode();
         String txnRef = UriComponentsBuilder.fromUriString(paymentService.createUrlPayment(code, user, "203.0.113.7"))
                 .build().getQueryParams().getFirst("vnp_TxnRef");

@@ -209,4 +209,11 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     long countBookedTickets(@Param("userId") long userId, @Param("eventId") long eventId);
 
     long countByStatusAndSourceAndExpiresAtBefore(OrderStatus status, OrderSource source, Instant expiredBefore);
+
+
+    /** The order a user made with this Idempotency-Key. One query: the join saves reading the user first. */
+    @Query("select o from Order o join User u on u.id = o.userId "
+            + "where u.publicId = :userPublicId and o.idempotencyKey = :idempotencyKey")
+    Optional<Order> findByUserPublicIdAndIdempotencyKey(@Param("userPublicId") UUID userPublicId,
+                                                        @Param("idempotencyKey") String idempotencyKey);
 }

@@ -143,12 +143,12 @@ class BookingGateIntegrationTest extends PostgresIntegrationTest {
     }
 
     private BaseBookingTicketResult bookQuantity(Fixture f, UUID user, int quantity) {
-        return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user);
+        return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user, UUID.randomUUID().toString());
     }
 
     private BaseBookingTicketResult bookSeats(Fixture f, UUID user, UUID... seats) {
         return bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seats), null), user);
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seats), null), user, UUID.randomUUID().toString());
     }
 
     private int available(Fixture f) {

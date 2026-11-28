@@ -212,7 +212,7 @@ class OrderCancellationBenchmarkTest extends PostgresIntegrationTest {
                     long t0 = System.nanoTime();
                     boolean ok = true;
                     try {
-                        bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, 1), user);
+                        bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, 1), user, UUID.randomUUID().toString());
                     } catch (RuntimeException e) {
                         ok = false;
                     }

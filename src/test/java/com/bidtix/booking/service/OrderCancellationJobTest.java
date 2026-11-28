@@ -262,12 +262,12 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
 
     private String bookQuantity(Fixture f, UUID user, int quantity) {
         return bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user).orderCode();
+                new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user, UUID.randomUUID().toString()).orderCode();
     }
 
     private String bookSeats(Fixture f, UUID user, UUID... seats) {
         return bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seats), null), user).orderCode();
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seats), null), user, UUID.randomUUID().toString()).orderCode();
     }
 
     /** An unpaid order past its deadline with one standing item, inserted by SQL; the zone counter is lowered like a real hold would. */

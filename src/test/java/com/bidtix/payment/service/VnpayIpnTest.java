@@ -202,7 +202,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         UUID lost = f.seatedSeatIds().get(1);
         UUID user = f.userIds().get(0);
         String code = bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(kept, lost), null), user).orderCode();
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(kept, lost), null), user, UUID.randomUUID().toString()).orderCode();
         Attempt attempt = attempt(user, code);
         jdbc.update("update seats set status = 'AVAILABLE', held_by_order_id = null, hold_expires_at = null "
                 + "where public_id = ?", lost);
@@ -356,7 +356,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         UUID seat = f.seatedSeatIds().get(0);
         UUID user = f.userIds().get(0);
         String code = bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), user).orderCode();
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), user, UUID.randomUUID().toString()).orderCode();
         Attempt attempt = attempt(user, code);
         giveUp(attempt, "FAILED");
         jdbc.update("update seats set status = 'AVAILABLE', held_by_order_id = null, hold_expires_at = null "
@@ -424,7 +424,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
     private Attempt standingAttempt(int quantity) {
         Fixture f = fixture();
         UUID user = f.userIds().get(0);
-        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user)
+        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user, UUID.randomUUID().toString())
                 .orderCode();
         return attempt(user, code);
     }

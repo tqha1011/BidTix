@@ -48,7 +48,7 @@ class MyOrdersApiTest extends ApiTest {
         UUID zone = Catalog.seatedZone(jdbc, event, 2);
         List<UUID> seats = Catalog.seats(jdbc, zone);
         UUID me = user("CUSTOMER");
-        String code = bookingService.bookTicket(new BookingTicketRequest(event, zone, seats, null), me).orderCode();
+        String code = bookingService.bookTicket(new BookingTicketRequest(event, zone, seats, null), me, UUID.randomUUID().toString()).orderCode();
 
         mvc.perform(get("/api/v1/orders/{code}", code).with(as(me, "CUSTOMER")))
                 .andExpect(status().isOk())
@@ -81,6 +81,6 @@ class MyOrdersApiTest extends ApiTest {
     }
 
     private String standing(UUID customer, UUID event, UUID zone, int quantity) {
-        return bookingService.bookTicket(new BookingTicketRequest(event, zone, null, quantity), customer).orderCode();
+        return bookingService.bookTicket(new BookingTicketRequest(event, zone, null, quantity), customer, UUID.randomUUID().toString()).orderCode();
     }
 }

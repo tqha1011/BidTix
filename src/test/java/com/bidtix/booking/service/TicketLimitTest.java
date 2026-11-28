@@ -126,7 +126,7 @@ class TicketLimitTest extends PostgresIntegrationTest {
         standing(f, f.userIds().get(1), LIMIT);
         UUID otherEvent = jdbc.queryForObject("select e.public_id from events e join ticket_zones z on z.event_id = e.id "
                 + "where z.public_id = ?", UUID.class, f.otherEventZoneId());
-        bookingService.bookTicket(new BookingTicketRequest(otherEvent, f.otherEventZoneId(), null, LIMIT), first);
+        bookingService.bookTicket(new BookingTicketRequest(otherEvent, f.otherEventZoneId(), null, LIMIT), first, UUID.randomUUID().toString());
     }
 
     @Test
@@ -179,13 +179,13 @@ class TicketLimitTest extends PostgresIntegrationTest {
     }
 
     private String standing(Fixture f, UUID user, int quantity) {
-        return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user)
+        return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user, UUID.randomUUID().toString())
                 .orderCode();
     }
 
     private String seats(Fixture f, UUID user, UUID... seatIds) {
         return bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seatIds), null), user).orderCode();
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seatIds), null), user, UUID.randomUUID().toString()).orderCode();
     }
 
     private static void assertOverTheLimit(ThrowingCallable booking) {

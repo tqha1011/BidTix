@@ -117,6 +117,10 @@ public interface SeatRepository extends JpaRepository<Seat, Long> {
     @Query("delete from Seat s where s.zone.id = :zoneId")
     int deleteByZoneId(Long zoneId);
 
+
+    @Query("select s.id from Seat s where s.publicId in :publicIds and s.zone.id = :zoneId")
+    List<Long> getListIdsByPublicIdsAndZoneId(Set<UUID> publicIds, Long zoneId);
+
     interface ZoneSeats {
         Long getZoneId();
 

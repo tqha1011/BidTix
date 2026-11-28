@@ -131,7 +131,7 @@ class VnpayCallbackControllerTest extends PostgresIntegrationTest {
     private Attempt attempt() {
         Fixture f = GeneralAdmissionFixtures.create(em, tx, 10, 1);
         UUID user = f.userIds().get(0);
-        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, 1), user).orderCode();
+        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, 1), user, UUID.randomUUID().toString()).orderCode();
         String url = paymentService.createUrlPayment(code, user, "203.0.113.7");
         return new Attempt(f.price(), UriComponentsBuilder.fromUriString(url).build().getQueryParams().getFirst("vnp_TxnRef"));
     }

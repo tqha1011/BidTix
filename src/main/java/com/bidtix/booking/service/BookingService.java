@@ -3,6 +3,8 @@ package com.bidtix.booking.service;
 import com.bidtix.booking.domain.Order;
 import com.bidtix.booking.domain.OrderItem;
 import com.bidtix.booking.domain.OrderSource;
+import com.bidtix.booking.domain.OrderStatus;
+import com.bidtix.booking.domain.Ticket;
 import com.bidtix.booking.dtos.BaseBookingTicketResult;
 import com.bidtix.booking.dtos.BookingTicketQuantityResult;
 import com.bidtix.booking.dtos.BookingTicketRequest;
@@ -10,6 +12,7 @@ import com.bidtix.booking.dtos.BookingTicketSeatsResult;
 import com.bidtix.booking.infrastructure.BookingGateway;
 import com.bidtix.booking.infrastructure.BookingProperties;
 import com.bidtix.booking.infrastructure.OrderRepository;
+import com.bidtix.booking.infrastructure.TicketRepository;
 import com.bidtix.common.utils.GenerateOrderCode;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
@@ -20,6 +23,7 @@ import com.bidtix.event.infrastructure.TicketZoneRepository;
 import com.bidtix.user.domain.User;
 import com.bidtix.user.infrastructure.UserRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -34,6 +38,7 @@ import java.util.stream.Collectors;
 public class BookingService {
     private final EventRepository eventRepository;
     private final OrderRepository orderRepository;
+    private final TicketRepository ticketRepository;
     private final TicketZoneRepository ticketZoneRepository;
     private final UserRepository userRepository;
     private final SeatRepository seatRepository;
@@ -49,20 +54,39 @@ public class BookingService {
      * {@code PayableOrders}), which marks the order PAID and issues the tickets. The returned result has status
      * PENDING_PAYMENT and no tickets, and the stock stays taken until {@code expiresAt}; an order nobody pays is
      * cancelled by {@code OrderCancellationJob}, which gives the stock back.
+     * <p>
+     * The order keeps the {@code Idempotency-Key}, one per user and key. A repeat that reaches this method (the filter
+     * no longer knew the key) gets the order it made: every refusal, the unique index included, looks for it first
+     * ({@link #findExisting}), and a request that succeeds pays nothing for this.
      */
-    public BaseBookingTicketResult bookTicket(BookingTicketRequest request, UUID userPublicId) {
-        rejectIfKnownUnavailable(request);
+    public BaseBookingTicketResult bookTicket(BookingTicketRequest request, UUID userPublicId, String idempotencyKey) {
+        try{
+            rejectIfKnownUnavailable(request);
+        }
+        catch (BusinessException e){
+            return findExisting(userPublicId,request,idempotencyKey)
+                    .orElseThrow(() -> e);
+        }
         try {
-            return inTransaction(() -> reserve(request, userPublicId));
+            return inTransaction(() -> reserve(request, userPublicId, idempotencyKey));
         } catch (BusinessException e) {
+            var existing = findExisting(userPublicId,request,idempotencyKey);
+            if (existing.isPresent()) {
+                return existing.get();
+            }
             rememberRejection(request, e);
             throw e;
+        }
+        catch (DataIntegrityViolationException e){
+            return findExisting(userPublicId,request,idempotencyKey)
+                    .orElseThrow(() -> e);
         }
     }
 
     /**
-     * Fast reject before any database work: if a recent request already learned that this quantity or these seats
-     * cannot be had, say so without opening a transaction. This only ever says no. A missing, expired or
+     * Fast reject before the booking transaction: if a recent request already learned that this quantity or these seats
+     * cannot be had, say so without taking any lock (the caller still looks for the request's own order, one read).
+     * This only ever says no. A missing, expired or
      * unreachable flag lets the request through, and the conditional UPDATE in {@link #reserve} still decides.
      * A flag can be stale for at most {@code bidtix.booking.gate-ttl-seconds} after stock comes back.
      */
@@ -117,7 +141,7 @@ public class BookingService {
      * Validates the request, creates the order and takes the stock. Runs in one transaction: if the stock
      * cannot be taken, everything (including the order) rolls back.
      */
-    private BaseBookingTicketResult reserve(BookingTicketRequest request, UUID userPublicId) {
+    private BaseBookingTicketResult reserve(BookingTicketRequest request, UUID userPublicId, String idempotencyKey) {
         Instant now = clock.instant();
         var user = userRepository.findByPublicId(userPublicId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
@@ -141,8 +165,8 @@ public class BookingService {
         checkTicketLimit(user, event, zone, request);
 
         return zone.getZoneType() == ZoneType.SEATED
-                ? reserveSeats(user, event, zone, request)
-                : reserveQuantity(user, event, zone, request.quantity());
+                ? reserveSeats(user, event, zone, request, idempotencyKey)
+                : reserveQuantity(user, event, zone, request.quantity(), idempotencyKey);
     }
 
     /**
@@ -160,11 +184,126 @@ public class BookingService {
         }
     }
 
-    private BookingTicketSeatsResult reserveSeats(User user, Event event, TicketZone zone, BookingTicketRequest request) {
+    /**
+     * The order this user already made with this key, if any: what a request that is about to be refused gets instead,
+     * when it is a repeat of the one that made the order. Throws {@code IDEMPOTENCY_KEY_REUSED} if that order was made
+     * by a different request. Without an order it costs one query.
+     */
+    private Optional<BaseBookingTicketResult> findExisting(UUID userPublicId,BookingTicketRequest request ,
+                                                           String idempotencyKey) {
+        return inTransaction(() -> orderRepository.findByUserPublicIdAndIdempotencyKey(userPublicId, idempotencyKey)
+                .map(order -> {
+                    requireSameRequest(order, request);
+                    return toResult(order);
+                }));
+    }
+
+    /**
+     * An order that already exists, in the shape {@link #bookTicket} answers with: its state NOW, so a retry may find it
+     * PAID (with its tickets) or CANCELLED. Call it inside a transaction: the items and the venue are read lazily.
+     */
+    private BaseBookingTicketResult toResult(Order order) {
+        var user = userRepository.findById(order.getUserId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.USER_NOTFOUND));
+        var event = eventRepository.findById(order.getEventId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
+        // a booking order's items are all of one zone
+        var zone = ticketZoneRepository.findById(order.getItems().getFirst().getZoneId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.ZONE_NOTFOUND));
+        // tickets are shown for a paid order only: those of a cancelled one are no longer good
+        List<Ticket> tickets = order.getStatus() == OrderStatus.PAID
+                ? ticketRepository.findByOrderIdOrderById(order.getId())
+                : List.of();
+
+        if (zone.getZoneType() == ZoneType.SEATED) {
+            return new BookingTicketSeatsResult(
+                    order.getOrderCode(),
+                    order.getStatus(),
+                    order.getTotalAmount(),
+                    order.getCurrency(),
+                    order.getExpiresAt(),
+                    order.getPaidAt(),
+                    user.getFullName(),
+                    event.getTitle(),
+                    event.getVenue().getAddress(),
+                    event.getStartsAt(),
+                    event.getEndsAt(),
+                    zone.getZoneType(),
+                    toSeatTickets(tickets));
+        }
+        return new BookingTicketQuantityResult(
+                order.getOrderCode(),
+                order.getStatus(),
+                order.getTotalAmount(),
+                order.getCurrency(),
+                order.getExpiresAt(),
+                order.getPaidAt(),
+                user.getFullName(),
+                event.getTitle(),
+                event.getVenue().getAddress(),
+                event.getStartsAt(),
+                event.getEndsAt(),
+                zone.getZoneType(),
+                order.getItems().stream().mapToInt(OrderItem::getQuantity).sum(),
+                tickets.stream()
+                        .map(ticket -> new BookingTicketQuantityResult.TicketQuantityInfo(ticket.getPublicId()))
+                        .toList());
+    }
+
+    /** One query for all the seats of the tickets. */
+    private List<BookingTicketSeatsResult.TicketSeatsInfo> toSeatTickets(List<Ticket> tickets) {
+        Map<Long, Seat> seats = seatRepository.findAllById(tickets.stream().map(Ticket::getSeatId).toList()).stream()
+                .collect(Collectors.toMap(Seat::getId, Function.identity()));
+        return tickets.stream()
+                .map(ticket -> {
+                    Seat seat = seats.get(ticket.getSeatId());
+                    return new BookingTicketSeatsResult.TicketSeatsInfo(ticket.getPublicId(), seat.getRowLabel(),
+                            seat.getSeatNumber());
+                })
+                .toList();
+    }
+
+    private void requireSameRequest(Order order, BookingTicketRequest request) {
+        boolean same = false;
+        var event = eventRepository.findById(order.getEventId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.EVENT_NOTFOUND));
+        var zone = ticketZoneRepository.findById(order.getItems().getFirst().getZoneId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.ZONE_NOTFOUND));
+
+        if(event.getPublicId().equals(request.eventPublicId())
+                && zone.getPublicId().equals(request.zonePublicId())) {
+            if(zone.getZoneType() == ZoneType.SEATED) {
+                var seatIds = order.getItems().stream()
+                        .map(OrderItem::getSeatId)
+                        .collect(Collectors.toSet());
+
+                var requested = request.seatPublicIds();
+                // as many ids as the order has seats, so no list, or a seat named twice, is another request
+                if (requested != null && requested.size() == seatIds.size()) {
+                    var seatRequestIds = seatRepository.getListIdsByPublicIdsAndZoneId(new HashSet<>(requested),
+                            zone.getId());
+                    same = seatIds.size() == seatRequestIds.size() && seatIds.containsAll(seatRequestIds);
+                }
+            } else {
+                var total = order.getItems().stream()
+                        .mapToInt(OrderItem::getQuantity)
+                        .sum();
+                boolean namesNoSeats = request.seatPublicIds() == null || request.seatPublicIds().isEmpty();
+                same = namesNoSeats && Integer.valueOf(total).equals(request.quantity());   // quantity may be null
+            }
+        }
+
+        if(!same){
+            throw new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REUSED, "Idempotency key reused with a different request");
+        }
+    }
+
+    private BookingTicketSeatsResult reserveSeats(User user, Event event, TicketZone zone, BookingTicketRequest request,
+                                                  String idempotencyKey) {
         Map<UUID, Seat> seatsByPublicId = checkAvailableSeats(zone.getId(), request);
 
         // create order & order items
-        var order = newOrder(user, event);
+        var order = newOrder(user, event,idempotencyKey);
         var orderItems = createOrderItems(zone, request, seatsByPublicId, order);
 
         // save DB changes immediately: the seat update below needs the order id
@@ -212,8 +351,9 @@ public class BookingService {
      * of the zone queues on it, so it is the LAST write: everything else, including the lazy venue read, is
      * done before it, and only the commit follows.
      */
-    private BookingTicketQuantityResult reserveQuantity(User user, Event event, TicketZone zone, int quantity) {
-        var order = newOrder(user, event);
+    private BookingTicketQuantityResult reserveQuantity(User user, Event event, TicketZone zone, int quantity,
+                                                        String idempotencyKey) {
+        var order = newOrder(user, event, idempotencyKey);
         order.addItem(zone.getId(), null, quantity, zone.getPrice());
         String address = event.getVenue().getAddress();   // lazy: read it before the counter lock is taken
 
@@ -242,10 +382,11 @@ public class BookingService {
                 quantity,
                 List.of());
     }
+
     
-    private Order newOrder(User user, Event event) {
+    private Order newOrder(User user, Event event, String idempotencyKey) {
         return new Order(user.getId(), event.getId(), GenerateOrderCode.generate(), OrderSource.BOOKING,
-                clock.instant().plus(properties.orderExpirationMinutes(), java.time.temporal.ChronoUnit.MINUTES));
+                clock.instant().plus(properties.orderExpirationMinutes(), java.time.temporal.ChronoUnit.MINUTES), idempotencyKey);
     }
 
     private void validateZoneAndSeats(TicketZone zone, BookingTicketRequest request) {
