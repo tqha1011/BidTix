@@ -33,6 +33,7 @@ Version numbers are global across modules, so a new migration always takes the n
 | V21 | `payment` | `payments.status_queries`, `payments.next_status_query_at` (asking about a payment left `PENDING`) |
 | V22 | `payment` | partial index `idx_payments_pending_requested_at` (reading the `PENDING` payments to ask about) |
 | V23 | `payment` | payment status `CANCELLED` (still unpaid at the last query) |
+| V24 | `booking` | `orders.idempotency_key`, partial unique `ux_orders_user_idempotency_key` (one order per user and key) |
 
 ## Conventions
 
@@ -84,6 +85,8 @@ users ──< idempotency_keys
   `PAID → REFUNDED`, or `PAID → CANCELLED` when the event is cancelled. `paid_at` is required once paid.
 - `orders.order_code`: `VARCHAR(20)`, `NOT NULL`, `UNIQUE`, shape `ORDER_<digits>`. The unique constraint is
   the safety net, so code generation must cope with a collision (retry), especially under concurrent orders.
+- `orders.idempotency_key` is the `Idempotency-Key` of the request that made a booking order, unique per user, `NULL`
+  for auction orders. It is written with the order, so it holds even when `idempotency_keys` no longer knows the key.
 - `order_items.unit_price` is a price snapshot. A seated item always has `quantity = 1`.
 - `tickets` exist only after a successful payment. `used_at` is set exactly when the status is `USED` (check-in).
 

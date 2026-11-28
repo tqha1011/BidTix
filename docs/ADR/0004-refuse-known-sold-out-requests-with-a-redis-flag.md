@@ -31,6 +31,8 @@ A gate that **can only refuse**, in front of step 1 of `BookingService.bookTicke
 - **Check before the transaction.** `rejectIfKnownUnavailable` asks `BookingGateway` first. A flagged request is
   refused with the same error the database would give (`ZONE_SOLD_OUT`, `SEAT_UNAVAILABLE` with the flagged
   `seatPublicIds`) before any connection is borrowed and before an order exists.
+  *Changed since:* a refused request now makes one read, to return the order it already made when it is a repeat with the
+  same `Idempotency-Key`. The figures below were measured without that read.
 - **Write only after the database said no.** When `reserve` throws `ZONE_SOLD_OUT` or `SEAT_UNAVAILABLE`,
   `rememberRejection` sets the flag and rethrows. A successful request writes nothing.
 - **Standing zones: the flag is the refused quantity.** Key `bidtix-backend:gate:zone:{zonePublicId}`, value N.

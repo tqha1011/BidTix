@@ -526,7 +526,9 @@ Known limits:
 - Neither refunds nor the query about unconfirmed payments have been seen to work on the VNPAY sandbox. A payment whose
   last query, a day later, gets no usable answer stays pending.
 - An idempotency key is stored outside the business transaction: a crash between the two lets the same request run
-  once more after a timeout.
+  once more. A repeated booking then gets the order it already made, because the order keeps the key; a repeated bid is
+  refused by the price rule and a repeated payment request makes another attempt. The booking gate benchmark has not been
+  run again since a refused booking gained a read.
 - This is not hexagonal architecture: entities are JPA entities and services call repositories directly. Module
   boundaries are a convention that no test enforces.
 - Only customers can register; organizer and admin accounts come from the seed or from SQL.

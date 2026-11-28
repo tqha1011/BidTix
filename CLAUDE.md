@@ -206,7 +206,8 @@ without tickets:
 
 **Booking gate** (`booking/infrastructure/BookingGateway`, `bidtix.booking.gate-enabled` / `gate-ttl-seconds`): before `reserve`,
 `BookingService.rejectIfKnownUnavailable` asks Redis whether a recent request already learned that this quantity (GA) or these
-seats cannot be had, and refuses without opening a transaction. The flags are written only after the database refused
+seats cannot be had, and refuses without the booking transaction (one read, to find an order the request itself made, see
+**Idempotency**). The flags are written only after the database refused
 (`rememberRejection`), live for a few seconds and can only refuse: a missing flag, an expired one or Redis down lets the request
 through (fail-open), and the conditional `UPDATE` still decides. Measured effect: `docs/benchmarks.md`, section "Booking gate on
 the real flow". **Whatever returns stock (the hold-expiry sweeper, giving GA quantity back, a cancel) must clear the matching
@@ -392,6 +393,12 @@ JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `
   carries `Idempotent-Replayed: true`. A key stuck `PROCESSING` for `processing-timeout` is taken as abandoned. The claim and the
   stored response are NOT in the business transaction, so a crash between the business commit and storing the response lets the
   same request run once more after the timeout: a flow whose repeat is harmful needs its own guard in the business transaction.
+- Booking has that guard: the order keeps the key (`orders.idempotency_key`, unique per user, null for auction orders).
+  `BookingService.bookTicket` looks for the request's own order (`findExisting`) only when it is about to refuse (the gate, a
+  `BusinessException`, the unique index), so a successful booking pays nothing for it; the same request gets that order in its
+  state now, another request with the key gets `IDEMPOTENCY_KEY_REUSED` (compared by event, zone and seats or quantity:
+  **a new field of `BookingTicketRequest` must be added to `requireSameRequest`**). The key never expires there. Gate
+  refusals are not remembered again, or the flag would never expire. Bids and payment requests have no such guard.
 
 **Caching**
 - Cache-aside with explicit TTLs; evict on write. Cached availability is a hint for reads only; every
