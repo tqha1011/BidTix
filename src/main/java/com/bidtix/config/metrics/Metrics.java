@@ -19,7 +19,8 @@ public class Metrics {
 
     /** The jobs that handle their items one by one and carry on when one fails. */
     public enum Job {
-        ORDER_CANCELLATION, CANCELLED_EVENT_ORDERS, CANCELLED_EVENT_AUCTIONS, AUCTION_CLOSING, OFFER_EXPIRY, REFUND
+        ORDER_CANCELLATION, CANCELLED_EVENT_ORDERS, CANCELLED_EVENT_AUCTIONS, AUCTION_CLOSING, OFFER_EXPIRY, REFUND,
+        PAYMENT_PENDING
     }
 
     /** The codes {@code PaymentService.processVnPayResponse} answers VNPAY with. */

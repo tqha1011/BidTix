@@ -13,8 +13,8 @@ import java.util.List;
 
 /**
  * Money that is waiting for something, refreshed every 30 s (see {@link BacklogGauge}). All but the number of refunds
- * waiting (and their age) should normally be zero, with one exception: a payment page the customer left stays PENDING,
- * because nothing asks VNPAY about it, so the stale PENDING payments add up until that is built.
+ * waiting (and their age) should normally be zero, with one exception: a payment page the customer left stays PENDING
+ * unless VNPAY reports it as failed ({@link PaymentPendingCancelJob}), so stale PENDING payments add up.
  */
 @Component
 public class PaymentBacklogGauges {

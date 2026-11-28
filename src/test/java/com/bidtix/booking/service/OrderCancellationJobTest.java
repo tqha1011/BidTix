@@ -73,7 +73,7 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
         }
     }
 
-    // ---- an order whose payment may still be confirmed (bidtix.payment.confirmation-grace: 10m) --------
+    // ---- an order whose payment may still be confirmed (bidtix.payment.confirmation-grace: 15m) --------
 
     @Test
     void anExpiredOrderWithAPendingPayment_keepsItsStockDuringTheGracePeriod() {
@@ -92,11 +92,23 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
     }
 
     @Test
+    void anOrderWithAPendingPayment_isStillKeptJustBeforeTheGracePeriodEnds() {
+        Fixture f = fixture(10, 1);
+        String code = bookQuantity(f, f.userIds().get(0), 3);
+        payment(code, "PENDING");
+        jdbc.update("update orders set expires_at = now() - interval '14 minutes' where order_code = ?", code);
+
+        job.cancelExpiredOrders();
+
+        assertThat(statusOf(code)).isEqualTo("PENDING_PAYMENT");
+    }
+
+    @Test
     void anOrderWithAPendingPayment_isCancelledOnceTheGracePeriodIsOver() {
         Fixture f = fixture(10, 1);
         String code = bookQuantity(f, f.userIds().get(0), 3);
         payment(code, "PENDING");
-        jdbc.update("update orders set expires_at = now() - interval '11 minutes' where order_code = ?", code);
+        jdbc.update("update orders set expires_at = now() - interval '16 minutes' where order_code = ?", code);
 
         job.cancelExpiredOrders();
 

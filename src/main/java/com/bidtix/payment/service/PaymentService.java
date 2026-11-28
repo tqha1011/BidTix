@@ -29,6 +29,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -45,6 +46,8 @@ public class PaymentService {
     private static final DateTimeFormatter VNPAY_TIME = DateTimeFormatter.ofPattern("yyyyMMddHHmmss");
     /** The value of both {@code vnp_ResponseCode} and {@code vnp_TransactionStatus} for money that was taken. */
     private static final String VNPAY_SUCCESS = "00";
+    /** Our answer to a callback whose payment was already decided. */
+    private static final String ALREADY_CONFIRMED = "02";
     /** A payment page that would close sooner than this is no use to the customer: the order is treated as not payable. */
     static final Duration MIN_PAYMENT_WINDOW = Duration.ofMinutes(1);
 
@@ -118,9 +121,10 @@ public class PaymentService {
      * <li>{@code 99}: an unexpected error; no payment or order was changed.</li>
      * </ul>
      * Every callback with a valid signature is first stored in {@code payment_webhook_events} (one row per event, in a
-     * transaction of its own, so it is kept when processing fails), and gets {@code processed_at} only in the transaction
-     * that records its result ({@code 00}). A stored event is therefore NOT proof that it was handled: whether to process
-     * is decided by the payment's status alone, never by the row being there.
+     * transaction of its own, so it is kept when processing fails). It gets {@code processed_at} in the transaction that
+     * records its result ({@code 00}), or afterwards when it is answered {@code 02} and agrees with what is recorded. A
+     * stored event is therefore NOT proof that it was handled: whether to process is decided by the payment's status
+     * alone, never by the row being there.
      * <p>
      * Not one {@code @Transactional} method on purpose: the event outlives a failure, and when
      * {@link PayableOrders#applyPayment} throws, its transaction has to roll back and the refund is recorded in another.
@@ -140,19 +144,81 @@ public class PaymentService {
         }
         try {
             storeEvent(params, response);
-            try {
-                return transactionTemplate.execute(tx -> confirm(response, tx));
-            } catch (BusinessException e) {
-                if (e.getErrorCode() != ErrorCode.ORDER_NOT_PAYABLE) {
-                    throw e;
-                }
-                // rolled back as a whole, but VNPAY has the money
-                return transactionTemplate.execute(tx -> refundLater(response, e.getMessage(), tx));
+            TransactionResponse answer = confirmOrRefundLater(response);
+            if (ALREADY_CONFIRMED.equals(answer.RspCode())) {
+                markEventIfItAgrees(response);
             }
+            return answer;
         } catch (RuntimeException e) {
             log.error("Could not process the VNPAY confirmation of payment {}", response.txnRef(), e);
             return TransactionResponse.create("99", "Unknown error");
         }
+    }
+
+    /**
+     * VNPAY's query reports the money of this payment as taken: the same result as a successful callback, with no stored
+     * event to mark. Nothing happens unless the payment is still PENDING. The caller has checked the answer's signature,
+     * reference and amount. Like the callback's processing, not one transaction: see {@link #processVnPayResponse}.
+     *
+     * @param payDate {@code vnp_PayDate} of the answer, may be null
+     */
+    public void confirmQueriedPayment(String txnRef, String transactionNo, String payDate) {
+        try {
+            transactionTemplate.executeWithoutResult(tx -> pendingPayment(txnRef).ifPresent(payment -> {
+                Outcome outcome = applyToOrder(payment, paidAt(payDate));
+                leavePending(payment, outcome.status(), transactionNo, outcome.failureReason(), tx);
+            }));
+        } catch (BusinessException e) {
+            if (e.getErrorCode() != ErrorCode.ORDER_NOT_PAYABLE) {
+                throw e;
+            }
+            // rolled back as a whole, but VNPAY has the money
+            transactionTemplate.executeWithoutResult(tx -> pendingPayment(txnRef).ifPresent(payment ->
+                    leavePending(payment, PaymentStatus.REFUND_PENDING, transactionNo, e.getMessage(), tx)));
+        }
+    }
+
+    /** VNPAY's query reports the transaction as failed: PENDING to FAILED, anything else stays as it is. */
+    public void failQueriedPayment(String txnRef, String reason) {
+        transactionTemplate.executeWithoutResult(tx -> pendingPayment(txnRef).ifPresent(payment ->
+                leavePending(payment, PaymentStatus.FAILED, null, reason, tx)));
+    }
+
+    private TransactionResponse confirmOrRefundLater(VnPayResponse response) {
+        try {
+            return transactionTemplate.execute(tx -> confirm(response, tx));
+        } catch (BusinessException e) {
+            if (e.getErrorCode() != ErrorCode.ORDER_NOT_PAYABLE) {
+                throw e;
+            }
+            // rolled back as a whole, but VNPAY has the money
+            return transactionTemplate.execute(tx -> refundLater(response, e.getMessage(), tx));
+        }
+    }
+
+    /**
+     * For a callback whose payment was already decided, by the query job or by another delivery: when it says the same as
+     * what was recorded, its stored event is marked processed. One that says otherwise stays unprocessed, for a person
+     * to see.
+     */
+    private void markEventIfItAgrees(VnPayResponse response) {
+        transactionTemplate.executeWithoutResult(tx -> paymentRepository
+                .findByProviderAndTxnRef(PaymentProvider.VNPAY, response.txnRef())
+                .filter(payment -> agrees(response, payment.getStatus()))
+                .ifPresent(payment -> webhookEventRepository
+                        .markProcessed(PaymentProvider.VNPAY, eventId(response), clock.instant())));
+    }
+
+    private static boolean agrees(VnPayResponse response, PaymentStatus recorded) {
+        if (!succeeded(response)) {
+            return recorded == PaymentStatus.FAILED;
+        }
+        return recorded == PaymentStatus.SUCCEEDED || recorded == PaymentStatus.REFUND_PENDING
+                || recorded == PaymentStatus.REFUNDED;
+    }
+
+    private static boolean succeeded(VnPayResponse response) {
+        return VNPAY_SUCCESS.equals(response.responseCode()) && VNPAY_SUCCESS.equals(response.transactionStatus());
     }
 
     /**
@@ -169,8 +235,7 @@ public class PaymentService {
                 .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
         var order = payableOrders.findOrder(payment.getOrderId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.ORDER_NOTFOUND));
-        boolean paid = VNPAY_SUCCESS.equals(response.responseCode()) && VNPAY_SUCCESS.equals(response.transactionStatus());
-        return new PaymentReturnResponse(order.code(), payment.getAmount(), paid, payment.getStatus());
+        return new PaymentReturnResponse(order.code(), payment.getAmount(), succeeded(response), payment.getStatus());
     }
 
     /** Its own transaction, committed before the processing starts. A repeated delivery adds nothing. */
@@ -207,20 +272,31 @@ public class PaymentService {
             return alreadyConfirmed();
         }
 
-        if (!VNPAY_SUCCESS.equals(response.responseCode()) || !VNPAY_SUCCESS.equals(response.transactionStatus())) {
+        if (!succeeded(response)) {
             // no transaction number: VNPAY may send the same placeholder for every failure, and the column is unique
             return record(payment, response, PaymentStatus.FAILED, null, "VNPAY response code "
                     + response.responseCode() + ", transaction status " + response.transactionStatus(), tx);
         }
 
-        String transactionNo = response.transactionNo();
-        return switch (payableOrders.applyPayment(payment.getOrderId(), paidAt(response.payDate()))) {
-            case APPLIED -> record(payment, response, PaymentStatus.SUCCEEDED, transactionNo, null, tx);
-            case ALREADY_PAID -> record(payment, response, PaymentStatus.REFUND_PENDING, transactionNo,
-                    "Another payment already paid the order", tx);
-            case NOT_PAYABLE -> record(payment, response, PaymentStatus.REFUND_PENDING, transactionNo,
-                    "The order expired or was cancelled", tx);
+        Outcome outcome = applyToOrder(payment, paidAt(response.payDate()));
+        return record(payment, response, outcome.status(), response.transactionNo(), outcome.failureReason(), tx);
+    }
+
+    /** What a paid transaction makes of its payment, once the order has been asked to take it. */
+    private record Outcome(PaymentStatus status, String failureReason) {
+    }
+
+    private Outcome applyToOrder(Payment payment, Instant paidAt) {
+        return switch (payableOrders.applyPayment(payment.getOrderId(), paidAt)) {
+            case APPLIED -> new Outcome(PaymentStatus.SUCCEEDED, null);
+            case ALREADY_PAID -> new Outcome(PaymentStatus.REFUND_PENDING, "Another payment already paid the order");
+            case NOT_PAYABLE -> new Outcome(PaymentStatus.REFUND_PENDING, "The order expired or was cancelled");
         };
+    }
+
+    private Optional<Payment> pendingPayment(String txnRef) {
+        return paymentRepository.findByProviderAndTxnRef(PaymentProvider.VNPAY, txnRef)
+                .filter(payment -> payment.getStatus() == PaymentStatus.PENDING);
     }
 
     /** The order refused the money by throwing: record only that it has to be given back. */
@@ -233,30 +309,39 @@ public class PaymentService {
         return record(payment, response, PaymentStatus.REFUND_PENDING, response.transactionNo(), reason, tx);
     }
 
-    /**
-     * PENDING -> {@code status} with one conditional UPDATE, and the stored event is marked processed with it. 0 payment
-     * rows means another delivery of the same confirmation got there first: everything this transaction did is rolled back.
-     */
+    /** {@link #leavePending} for a callback: the stored event is marked processed in the same transaction. */
     private TransactionResponse record(Payment payment, VnPayResponse response, PaymentStatus status,
                                        String transactionNo, String failureReason, TransactionStatus tx) {
-        int updated = paymentRepository.updatePaymentStatusByTxnRef(payment.getTxnRef(), transactionNo, status,
-                failureReason, payment.getVersion(), clock.instant());
-        if (updated != 1) {
-            tx.setRollbackOnly();
+        if (!leavePending(payment, status, transactionNo, failureReason, tx)) {
             return alreadyConfirmed();
         }
         if (webhookEventRepository.markProcessed(PaymentProvider.VNPAY, eventId(response), clock.instant()) != 1) {
             // stored just before, and only this transaction may mark it: anything else is a bug, so undo it all
             throw new IllegalStateException("No unprocessed webhook event " + eventId(response));
         }
-        if (status == PaymentStatus.REFUND_PENDING) {
-            log.warn("Payment {} has to be refunded: {}", payment.getTxnRef(), failureReason);
-        }
         return TransactionResponse.create("00", "Confirm Success");
     }
 
+    /**
+     * PENDING -> {@code status} with one conditional UPDATE. False (0 rows) means a callback or a query got there first:
+     * everything this transaction did is rolled back.
+     */
+    private boolean leavePending(Payment payment, PaymentStatus status, String transactionNo, String failureReason,
+                                 TransactionStatus tx) {
+        int updated = paymentRepository.updatePaymentStatusByTxnRef(payment.getTxnRef(), transactionNo, status,
+                failureReason, payment.getVersion(), clock.instant());
+        if (updated != 1) {
+            tx.setRollbackOnly();
+            return false;
+        }
+        if (status == PaymentStatus.REFUND_PENDING) {
+            log.warn("Payment {} has to be refunded: {}", payment.getTxnRef(), failureReason);
+        }
+        return true;
+    }
+
     private static TransactionResponse alreadyConfirmed() {
-        return TransactionResponse.create("02", "Order already confirmed");
+        return TransactionResponse.create(ALREADY_CONFIRMED, "Order already confirmed");
     }
 
     /** VNPAY wants an address of 7 to 45 characters; the IPv6 loopback some servers report is replaced by the IPv4 one. */

@@ -6,7 +6,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 
 /**
  * Turns on the {@code @Scheduled} jobs (auction activation and closing, offer expiry, unpaid-order cancellation,
- * refunds). They are on
+ * refunds and asking about PENDING payments). They are on
  * unless {@code bidtix.scheduling.enabled=false}, which a test sets when a background job would race with what it stubs.
  */
 @Configuration

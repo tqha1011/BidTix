@@ -132,11 +132,13 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             + "and (p.refundNextQueryAt is null or p.refundNextQueryAt <= :now)")
     int claimRefundQuery(@Param("id") long id, @Param("nextQueryAt") Instant nextQueryAt, @Param("now") Instant now);
 
-    /** No more scheduled queries about this refund: its answer is known (rejected). */
+    /**
+     * No more scheduled queries about this refund: its answer is known (rejected).
+     */
     @Modifying
     @Query("update Payment p set p.refundQueries = :maxQueries, p.updatedAt = :now, p.version = p.version + 1 "
             + "where p.id = :id and p.status = com.bidtix.payment.domain.PaymentStatus.REFUND_PENDING")
-    int stopRefundQueries(@Param("id") long id, @Param("maxQueries") int maxQueries, @Param("now") Instant now);
+    void stopRefundQueries(@Param("id") long id, @Param("maxQueries") int maxQueries, @Param("now") Instant now);
 
     long countByStatus(PaymentStatus status);
 
@@ -154,4 +156,33 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     @Query("select count(p) from Payment p where p.status = com.bidtix.payment.domain.PaymentStatus.REFUND_PENDING "
             + "and (p.refundAttempts >= :maxAttempts or p.refundQueries >= :maxQueries or p.requestedAt is null)")
     long countRefundsNeedingAPerson(@Param("maxAttempts") int maxAttempts, @Param("maxQueries") int maxQueries);
+
+
+    /**
+     * Up to {@code limit} PENDING payments due to be asked about at {@code now}: made at or before
+     * {@code requestedBefore} (younger ones are left to the callback), asked about fewer than {@code maxQueries} times,
+     * and past the waiting time of the last query. Newest first, so that a customer who is waiting does not queue behind
+     * old payments. Payments without {@code requested_at} never match: VNPAY cannot be asked about them.
+     * {@code FOR UPDATE SKIP LOCKED}: call it inside the transaction that takes them with {@link #markStatusQueried}.
+     */
+    @Query(value = "select * from payments "
+            + "where status = 'PENDING' and requested_at <= :requestedBefore "
+            + "and status_queries < :maxQueries "
+            + "and (next_status_query_at is null or next_status_query_at <= :now) "
+            + "order by requested_at desc, id desc limit :limit "
+            + "for update skip locked", nativeQuery = true)
+    List<Payment> findPaymentsToQuery(@Param("now") Instant now, @Param("requestedBefore") Instant requestedBefore,
+                                      @Param("maxQueries") int maxQueries, @Param("limit") int limit);
+
+    /**
+     * Takes one due query: counts it and sets when the next one may be made. 0 means somebody else took it, or the
+     * payment is not PENDING any more. Check the row count. It leaves {@code version} alone on purpose: a callback that
+     * read the payment just before must still be able to record its result.
+     */
+    @Modifying(clearAutomatically = true)
+    @Query("update Payment p " +
+            "set p.statusQueries = p.statusQueries + 1, p.nextStatusQueryAt = :nextQueryAt, p.updatedAt = :now "
+            + "where p.id = :id and p.status = com.bidtix.payment.domain.PaymentStatus.PENDING "
+            + "and (p.nextStatusQueryAt is null or p.nextStatusQueryAt <= :now)")
+    int markStatusQueried(@Param("id") long id, @Param("nextQueryAt") Instant nextQueryAt, @Param("now") Instant now);
 }

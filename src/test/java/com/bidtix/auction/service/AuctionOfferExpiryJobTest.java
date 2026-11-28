@@ -209,7 +209,7 @@ class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
         assertThat(available(f)).as("the ticket is sold, not back on the counter").isEqualTo(9);
     }
 
-    // ---- a payment that may still be confirmed (bidtix.payment.confirmation-grace: 10m) ------------
+    // ---- a payment that may still be confirmed (bidtix.payment.confirmation-grace: 15m) ------------
 
     @Test
     void anExpiredOfferWithAPendingPayment_isKept_soAPaymentMadeInTimeStillWins() {
@@ -235,7 +235,7 @@ class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
         Fixture f = fixture(10);
         UUID auction = awaitingPayment(standing(f, null), new Bidding(bidder(), 500_000), new Bidding(bidder(), 450_000));
         pendingPayment(((Number) offer(auction, 1).get("order_id")).longValue());
-        jdbc.update("update auction_offers set expires_at = now() - interval '11 minutes' where offer_rank = 1 "
+        jdbc.update("update auction_offers set expires_at = now() - interval '16 minutes' where offer_rank = 1 "
                 + "and auction_id = (select id from auctions where public_id = ?)", auction);
 
         job.expireOffers();
