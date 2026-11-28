@@ -334,7 +334,12 @@ stateDiagram-v2
     [*] --> PENDING
     PENDING --> SUCCEEDED: applied to the order
     PENDING --> FAILED: declined
+    PENDING --> CANCELLED: still unpaid at the last query
     PENDING --> REFUND_PENDING: money cannot be applied
+    FAILED --> SUCCEEDED: late success, applied
+    FAILED --> REFUND_PENDING: late success, too late
+    CANCELLED --> SUCCEEDED: late success, applied
+    CANCELLED --> REFUND_PENDING: late success, too late
     SUCCEEDED --> REFUND_PENDING: event cancelled
     REFUND_PENDING --> REFUNDED: VNPAY confirms
 ```
@@ -518,8 +523,8 @@ docker compose -f compose.yaml -f compose-app.yaml -f monitoring/compose.observa
 
 Known limits:
 
-- Neither refunds nor the query about unconfirmed payments have been seen to work on the VNPAY sandbox. A payment still
-  unconfirmed after its last query, a day later, stays pending.
+- Neither refunds nor the query about unconfirmed payments have been seen to work on the VNPAY sandbox. A payment whose
+  last query, a day later, gets no usable answer stays pending.
 - An idempotency key is stored outside the business transaction: a crash between the two lets the same request run
   once more after a timeout.
 - This is not hexagonal architecture: entities are JPA entities and services call repositories directly. Module

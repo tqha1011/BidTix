@@ -32,6 +32,7 @@ Version numbers are global across modules, so a new migration always takes the n
 | V20 | `event` | `events.cancelled_at`, `events.auctions_cleaned_at`, `events.orders_cleaned_at` (cleaning up a cancelled event) |
 | V21 | `payment` | `payments.status_queries`, `payments.next_status_query_at` (asking about a payment left `PENDING`) |
 | V22 | `payment` | partial index `idx_payments_pending_requested_at` (reading the `PENDING` payments to ask about) |
+| V23 | `payment` | payment status `CANCELLED` (still unpaid at the last query) |
 
 ## Conventions
 
@@ -104,7 +105,9 @@ users ──< idempotency_keys
   it as `vnp_TransactionDate`. `NULL` for payments made before V16.
 - `ux_payments_one_succeeded_per_order` (V15): at most one `SUCCEEDED` payment per order. A second confirmed payment for
   the same order is stored as `REFUND_PENDING`, as is one that arrives after the order expired or was cancelled.
-- A payment moves `PENDING → SUCCEEDED | FAILED | REFUND_PENDING`, then `REFUND_PENDING → REFUNDED`, set only when
+- A payment moves `PENDING → SUCCEEDED | FAILED | CANCELLED | REFUND_PENDING` (`CANCELLED`: the last query about it
+  still found no payment; a successful callback later still moves a `FAILED` or `CANCELLED` payment to `SUCCEEDED` or
+  `REFUND_PENDING`), then `REFUND_PENDING → REFUNDED`, set only when
   VNPAY's querydr reports the full refund as successful. `provider_txn_id` is not stored for a failed transaction.
   Cancelling an event also moves the `SUCCEEDED` payments of its orders to `REFUND_PENDING`.
 - `payment_webhook_events` is an inbox: every callback with a valid signature, one row per

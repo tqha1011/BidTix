@@ -247,8 +247,8 @@ The module sees orders only through `PayableOrders`, which `booking` implements 
    exact `vnp_CreateDate` sent (VNPAY's query and refund APIs ask for it).
 2. `GET /api/v1/payments/vnpay/ipn` (public, signed, rate limit `vnpay-ipn`; `VnpayCallbackController`):
    `processVnPayResponse` checks the signature (`97`), stores the callback in `payment_webhook_events` (own transaction),
-   then in one transaction finds the payment (`01`), compares the amount (`04`), requires `PENDING` (`02`) and records the
-   result (`00`): `FAILED`, or `applyPayment` (order `PAID`, seats `HELD -> SOLD`, tickets issued, auction offer accepted and
+   then in one transaction finds the payment (`01`), compares the amount (`04`), requires `PENDING`, or a success for a
+   `FAILED` or `CANCELLED` payment (`stillTakes`; otherwise `02`), and records the result (`00`): `FAILED`, or `applyPayment` (order `PAID`, seats `HELD -> SOLD`, tickets issued, auction offer accepted and
    auction settled) with `SUCCEEDED`, or `REFUND_PENDING` when the order cannot take the money. Anything unexpected: `99`.
    VNPAY retries unless it gets `00` or `02`. The answer is `TransactionResponse` (`RspCode`, `Message`), never a
    `ProblemDetail` once the request reaches the service.
@@ -261,7 +261,8 @@ being released. A payment is taken one at a time (`FOR UPDATE SKIP LOCKED`, `mar
 alone so that a callback at work does not lose) and committed before the call; a run takes 20 at most and stops at the
 first call without any answer, because the scheduled jobs share one thread. Only a signed answer with response code `00`,
 type `01` and transaction status `00` (and our amount; `PaymentService.confirmQueriedPayment`: tickets, or
-`REFUND_PENDING`) or `02` (`FAILED`) changes anything.
+`REFUND_PENDING`) or `02` (`FAILED`) changes anything, and at the last query an answer showing no payment (status `01`, or
+response code `91`, signed or not) makes the payment `CANCELLED`.
 
 Refunds (`payment/infrastructure/RefundPaymentJob`, `bidtix.payment.refund-cron`, every minute in `application.yaml`; `-` turns it off, which
 `PostgresIntegrationTest` does): batches of `REFUND_PENDING` payments are locked (`SKIP LOCKED`) and claimed with
@@ -279,8 +280,7 @@ never gives the refund claim back.
 Rules for changing it: the payment's conditional `UPDATE` (row count checked) is the guard against processing twice, never
 the stored event; no refund or other VNPAY call inside the request's transaction; only what VNPAY says server to server
 (the IPN or querydr) confirms a payment, never the return URL. Open points: refunds and payment queries not yet verified on
-the sandbox, nothing scans events with `processed_at IS NULL`, a payment still `PENDING` after its last query stays so, and
-a successful callback for a `FAILED` payment is answered `02` and not applied.
+the sandbox, nothing scans events with `processed_at IS NULL`, and a payment whose last query got no usable answer stays `PENDING`.
 
 ## Architecture
 
