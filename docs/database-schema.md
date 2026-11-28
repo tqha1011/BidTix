@@ -30,6 +30,8 @@ Version numbers are global across modules, so a new migration always takes the n
 | V18 | `payment` | `payments.refund_attempts`, `payments.refund_next_attempt_at` (retrying a refund request) |
 | V19 | `payment` | `payments.refund_queries`, `payments.refund_next_query_at` (asking about a requested refund) |
 | V20 | `event` | `events.cancelled_at`, `events.auctions_cleaned_at`, `events.orders_cleaned_at` (cleaning up a cancelled event) |
+| V21 | `payment` | `payments.status_queries`, `payments.next_status_query_at` (asking about a payment left `PENDING`) |
+| V22 | `payment` | partial index `idx_payments_pending_requested_at` (reading the `PENDING` payments to ask about) |
 
 ## Conventions
 
@@ -95,6 +97,9 @@ users ──< idempotency_keys
   holds the payment back, and `refund_attempts` (counted at each claim) ends the retries after 5.
 - A requested refund is asked about with querydr: `refund_queries` counts the scheduled queries (10 at most, set to the
   limit when the refund is rejected) and `refund_next_query_at` spaces them out.
+- A payment left `PENDING` is asked about with querydr: `status_queries` counts the queries (6 at most) and
+  `next_status_query_at` spaces them out. Taking a query leaves `version` unchanged
+  ([ADR-0006](ADR/0006-ask-vnpay-about-payments-left-pending.md)).
 - `payments.requested_at` is exactly the `vnp_CreateDate` sent to VNPAY (whole seconds). Its query and refund APIs need
   it as `vnp_TransactionDate`. `NULL` for payments made before V16.
 - `ux_payments_one_succeeded_per_order` (V15): at most one `SUCCEEDED` payment per order. A second confirmed payment for
@@ -104,7 +109,8 @@ users ──< idempotency_keys
   Cancelling an event also moves the `SUCCEEDED` payments of its orders to `REFUND_PENDING`.
 - `payment_webhook_events` is an inbox: every callback with a valid signature, one row per
   `UNIQUE (provider, provider_event_id)` (VNPAY: `vnp_TxnRef:vnp_TransactionStatus`), with the payload.
-  `processed_at` is set in the transaction that records the result; a row without it is still unhandled. A repeat adds
+  `processed_at` is set in the transaction that records the result, or afterwards for a callback that agrees with a
+  result already recorded; a row without it is still unhandled. A repeat adds
   no row, and the row does not decide whether a delivery is processed: the payment's status does
   ([ADR-0005](ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)).
 - A successful payment for an order that is `CANCELLED` (or already paid) is stored as `REFUND_PENDING`, not applied,

@@ -90,8 +90,7 @@ seat-hold or payment flow).
 > from 2 hours before it starts until it ends (`CHECK_IN_NOT_OPEN`). A ticket of another event is `TICKET_NOT_FOUND`;
 > `TICKET_ALREADY_USED` carries `usedAt`. Keep the 2 hours shorter than the 3 days' cancellation notice, so no ticket is
 > USED when an event is cancelled. Rate limit policy `check-in`.
-> Not started: querying VNPAY for payments left
-> PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
+> Neither refunds nor querydr answers about a payment have been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
 > logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (publish, update and cancel do) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES` and `CacheConfig.VENUE_PAGES`
 > (adding one: only `VENUE_PAGES`).
@@ -213,9 +212,9 @@ through (fail-open), and the conditional `UPDATE` still decides. Measured effect
 the real flow". **Whatever returns stock (the hold-expiry sweeper, giving GA quantity back, a cancel) must clear the matching
 flags after its database commit**, or customers are refused for up to the TTL.
 
-**Grace period** (`payment/service/ConfirmationGrace`, `bidtix.payment.confirmation-grace`, 10 m): an expired order with a
+**Grace period** (`payment/service/ConfirmationGrace`, `bidtix.payment.confirmation-grace`, 15 m): an expired order with a
 `PENDING` payment is released only after the grace period, by both expiry jobs, because the provider's callback may still be
-on its way. The customer gets no extra time to pay. Whatever else releases the stock of an unpaid order must ask it too.
+on its way, or the query about the payment may still find it paid. The customer gets no extra time to pay. Whatever else releases the stock of an unpaid order must ask it too.
 
 **Unpaid orders** (`booking/infrastructure/OrderCancellationJob`, every minute after the last run ended): batches of 100 expired
 `PENDING_PAYMENT` **booking** order ids are read, and each batch is one transaction: lock the orders with `FOR UPDATE SKIP LOCKED`,
@@ -240,7 +239,8 @@ A mark is set only when the job has nothing left for the event (orders: also onl
 `cancelled_at` is over 5 minutes old; a marked event is never looked at again. Anything else that can create work for a
 cancelled event must finish within that window or check the event's status.
 
-**Payment flow** (`payment` module; decisions: [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)).
+**Payment flow** (`payment` module; decisions: [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)
+and [ADR-0006](docs/ADR/0006-ask-vnpay-about-payments-left-pending.md)).
 The module sees orders only through `PayableOrders`, which `booking` implements (`OrderPayment`).
 1. `POST /api/v1/orders/{orderCode}/payments` (CUSTOMER): `PaymentService.createUrlPayment` commits a `PENDING` payment with
    a new `txn_ref` and returns the signed VNPAY URL, which closes no later than the order's deadline. `requested_at` keeps the
@@ -252,6 +252,16 @@ The module sees orders only through `PayableOrders`, which `booking` implements 
    auction settled) with `SUCCEEDED`, or `REFUND_PENDING` when the order cannot take the money. Anything unexpected: `99`.
    VNPAY retries unless it gets `00` or `02`. The answer is `TransactionResponse` (`RspCode`, `Message`), never a
    `ProblemDetail` once the request reaches the service.
+
+Payments left `PENDING` (`payment/infrastructure/PaymentPendingCancelJob`, `bidtix.payment.status-query-cron`, every
+minute; `-` turns it off, which `PostgresIntegrationTest` and the load test stacks do): querydr is asked 3, 10, 17 and 24
+minutes after the payment was made, then after 1 and 24 hours (`status_queries`, `next_status_query_at`; 6 at most). The
+first four times are tied to `expire-minutes` and the grace period: two must fall between the page closing and the stock
+being released. A payment is taken one at a time (`FOR UPDATE SKIP LOCKED`, `markStatusQueried`, which leaves `version`
+alone so that a callback at work does not lose) and committed before the call; a run takes 20 at most and stops at the
+first call without any answer, because the scheduled jobs share one thread. Only a signed answer with response code `00`,
+type `01` and transaction status `00` (and our amount; `PaymentService.confirmQueriedPayment`: tickets, or
+`REFUND_PENDING`) or `02` (`FAILED`) changes anything.
 
 Refunds (`payment/infrastructure/RefundPaymentJob`, `bidtix.payment.refund-cron`, every minute in `application.yaml`; `-` turns it off, which
 `PostgresIntegrationTest` does): batches of `REFUND_PENDING` payments are locked (`SKIP LOCKED`) and claimed with
@@ -267,9 +277,10 @@ VNPAY's documentation that no real answer has confirmed yet (the sandbox answers
 never gives the refund claim back.
 
 Rules for changing it: the payment's conditional `UPDATE` (row count checked) is the guard against processing twice, never
-the stored event; no refund or other VNPAY call inside the request's transaction; only the IPN confirms a payment, never the
-return URL. Open points: refunds not yet verified on the sandbox, nothing scans events with `processed_at IS NULL` or asks VNPAY
-about payments left `PENDING`.
+the stored event; no refund or other VNPAY call inside the request's transaction; only what VNPAY says server to server
+(the IPN or querydr) confirms a payment, never the return URL. Open points: refunds and payment queries not yet verified on
+the sandbox, nothing scans events with `processed_at IS NULL`, a payment still `PENDING` after its last query stays so, and
+a successful callback for a `FAILED` payment is answered `02` and not applied.
 
 ## Architecture
 

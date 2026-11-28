@@ -40,7 +40,7 @@ The facts about this project in one place, for a portfolio, a CV or a quick revi
 | **Period** | Started November 2026, still in progress |
 | **Stack** | Java 21, Spring Boot 4 (Web MVC, Data JPA, Security), PostgreSQL, Flyway, Redis, VNPAY, JUnit 5, Testcontainers, k6, Prometheus, Grafana, Docker, GitHub Actions |
 | **Architecture** | Modular monolith, package-by-feature, layered inside each module |
-| **Evidence** | 549 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
+| **Evidence** | 549 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 6 [architecture decision records](docs/ADR) |
 
 **The problem.** When a popular concert goes on sale, thousands of requests compete for the same seats within seconds,
 clients retry, payment results arrive late or twice, and unpaid orders must give their stock back. Each of these can
@@ -194,7 +194,8 @@ sequenceDiagram
 
 ### Payment: from redirect to ticket
 
-Only VNPAY's server-to-server callback records a payment. The page the browser returns to is read-only.
+VNPAY's server-to-server callback records a payment, and when none arrives a job asks VNPAY. The page the browser
+returns to is read-only.
 
 ```mermaid
 sequenceDiagram
@@ -260,13 +261,14 @@ sequenceDiagram
 | Auction closing | every minute | ended auctions go to the winner, or fail and release the ticket |
 | Offer expiry | every minute | an unpaid offer passes to the next bidder, at that bidder's own bid |
 | Unpaid order cancellation | every minute | expired booking orders are cancelled and their stock returns, 100 per transaction |
+| Payment status query | every minute | asks VNPAY about payments still unconfirmed, and records the result |
 | Refunds | every minute | requests refunds from VNPAY and confirms their outcome |
 | Cancelled events, auctions | every 5 s | calls off open auctions, with their offer and unpaid order |
 | Cancelled events, orders | every 5 s | cancels unpaid orders, and paid ones with their tickets, marking the payment for refund |
 
 Every job claims rows with `FOR UPDATE SKIP LOCKED`, so several application instances can run them. An expired order
-or offer with a payment still unconfirmed is kept 10 minutes longer, so a late callback does not punish a customer who
-paid in time.
+or offer with a payment still unconfirmed is kept 15 minutes longer, so a late or lost callback does not punish a
+customer who paid in time.
 
 ### Cancelling an event
 
@@ -516,7 +518,8 @@ docker compose -f compose.yaml -f compose-app.yaml -f monitoring/compose.observa
 
 Known limits:
 
-- Refunds have not been seen to work on the VNPAY sandbox, and nothing reconciles payments left pending.
+- Neither refunds nor the query about unconfirmed payments have been seen to work on the VNPAY sandbox. A payment still
+  unconfirmed after its last query, a day later, stays pending.
 - An idempotency key is stored outside the business transaction: a crash between the two lets the same request run
   once more after a timeout.
 - This is not hexagonal architecture: entities are JPA entities and services call repositories directly. Module
@@ -541,6 +544,7 @@ Done:
 - [x] Booking of seats and standing tickets, cancellation of unpaid orders
 - [x] Auctions: bidding, anti-sniping, closing, second-chance offers, leaderboard
 - [x] VNPAY payments, idempotent callback, grace period, refund job
+- [x] Asking VNPAY about payments whose callback never came
 - [x] Idempotency keys, Redis cache, rate limits, booking gate
 - [x] Concurrency tests, benchmarks and load tests
 - [x] Cancelling an event: auctions called off, orders cancelled, payments marked for refund
@@ -561,6 +565,7 @@ Next:
   - [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md): take standing-zone stock with a conditional UPDATE
   - [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md): refuse known sold-out requests with a short-lived Redis flag
   - [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md): confirm VNPAY payments in the IPN callback
+  - [ADR-0006](docs/ADR/0006-ask-vnpay-about-payments-left-pending.md): ask VNPAY about payments left pending
 - [`docs/benchmarks.md`](docs/benchmarks.md): benchmarks and load tests, with method and caveats
 - [`docs/load-test-log.md`](docs/load-test-log.md): every load test run with its raw results
 - [`CLAUDE.md`](CLAUDE.md): conventions and rules for working in this repository
