@@ -1,5 +1,7 @@
 package com.bidtix.payment.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import com.bidtix.support.Counters;
 import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.infrastructure.OrderCancellationJob;
 import com.bidtix.booking.service.BookingService;
@@ -11,6 +13,8 @@ import com.bidtix.payment.infrastructure.VnpaySigner;
 import com.bidtix.support.PostgresIntegrationTest;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
@@ -48,6 +52,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
             .atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
 
     @Autowired PaymentService service;
+    @Autowired MeterRegistry meters;
     @Autowired VnpaySigner signer;
     @Autowired BookingService bookingService;
     @Autowired OrderCancellationJob cancellationJob;
@@ -62,6 +67,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
 
     @Test
     void aPaidTransaction_marksThePaymentSucceeded_andTheOrderPaidAtVnpaysTime() {
+        double countedBefore = ipnAnswers("00");
         Attempt attempt = standingAttempt(2);
 
         TransactionResponse answer = send(paid(attempt));
@@ -73,10 +79,12 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         assertThat(jdbc.queryForObject("select paid_at from orders where order_code = ?", Timestamp.class, attempt.orderCode())
                 .toInstant()).isEqualTo(PAID_AT);
         assertThat(tickets(attempt)).isEqualTo(2);
+        assertThat(ipnAnswers("00")).isEqualTo(countedBefore + 1);
     }
 
     @Test
     void aWrongSignature_isAnswered97_andChangesNothing() {
+        double countedBefore = ipnAnswers("97");
         Attempt attempt = standingAttempt(1);
         Map<String, String> params = paid(attempt);
         params.put("vnp_BankCode", "OTHER");   // changed after signing
@@ -85,6 +93,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
 
         assertUntouched(attempt);
         assertThat(events(attempt.txnRef())).as("anyone can call the route: unsigned requests are not stored").isEmpty();
+        assertThat(ipnAnswers("97")).isEqualTo(countedBefore + 1);
     }
 
     @Test
@@ -193,7 +202,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         UUID lost = f.seatedSeatIds().get(1);
         UUID user = f.userIds().get(0);
         String code = bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(kept, lost), null), user).orderCode();
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(kept, lost), null), user, UUID.randomUUID().toString()).orderCode();
         Attempt attempt = attempt(user, code);
         jdbc.update("update seats set status = 'AVAILABLE', held_by_order_id = null, hold_expires_at = null "
                 + "where public_id = ?", lost);
@@ -293,6 +302,112 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         assertThat(tickets(attempt)).isEqualTo(1);
     }
 
+    // ---- a success that arrives after we gave up on the payment ----------------------------------
+
+    @ParameterizedTest
+    @ValueSource(strings = {"FAILED", "CANCELLED"})
+    void aLateSuccess_forAnOrderStillWaiting_issuesTheTickets(String givenUpAs) {
+        Attempt attempt = standingAttempt(2);
+        giveUp(attempt, givenUpAs);
+
+        assertThat(send(paid(attempt)).RspCode()).isEqualTo("00");
+
+        assertThat(payment(attempt)).containsEntry("status", "SUCCEEDED").containsEntry("provider_txn_id", numberOf(attempt))
+                .containsEntry("failure_reason", null);
+        assertThat(orderStatus(attempt)).isEqualTo("PAID");
+        assertThat(tickets(attempt)).isEqualTo(2);
+        assertProcessed(attempt.txnRef());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"FAILED", "CANCELLED"})
+    void aLateSuccess_forACancelledOrder_isMarkedForRefund(String givenUpAs) {
+        Attempt attempt = standingAttempt(1);
+        giveUp(attempt, givenUpAs);
+        jdbc.update("update orders set expires_at = now() - interval '1 minute' where order_code = ?", attempt.orderCode());
+        cancellationJob.cancelExpiredOrders();
+
+        assertThat(send(paid(attempt)).RspCode()).isEqualTo("00");
+
+        assertThat(payment(attempt)).containsEntry("status", "REFUND_PENDING")
+                .containsEntry("provider_txn_id", numberOf(attempt));
+        assertThat(orderStatus(attempt)).isEqualTo("CANCELLED");
+        assertThat(tickets(attempt)).isZero();
+        assertProcessed(attempt.txnRef());
+    }
+
+    @Test
+    void aLateSuccess_forAnOrderPaidByAnotherAttempt_isMarkedForRefund() {
+        Attempt first = standingAttempt(1);
+        Attempt second = anotherAttempt(first);
+        giveUp(first, "CANCELLED");
+        send(paid(second));
+
+        assertThat(send(paid(first)).RspCode()).isEqualTo("00");
+
+        assertThat(payment(first)).containsEntry("status", "REFUND_PENDING");
+        assertThat(payment(second)).containsEntry("status", "SUCCEEDED");
+        assertThat(tickets(first)).isEqualTo(1);
+    }
+
+    @Test
+    void aLateSuccess_whoseSeatHoldWasLost_isMarkedForRefund() {
+        Fixture f = fixture();
+        UUID seat = f.seatedSeatIds().get(0);
+        UUID user = f.userIds().get(0);
+        String code = bookingService.bookTicket(
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), user, UUID.randomUUID().toString()).orderCode();
+        Attempt attempt = attempt(user, code);
+        giveUp(attempt, "FAILED");
+        jdbc.update("update seats set status = 'AVAILABLE', held_by_order_id = null, hold_expires_at = null "
+                + "where public_id = ?", seat);
+
+        assertThat(send(paid(attempt)).RspCode()).isEqualTo("00");
+
+        assertThat(payment(attempt)).containsEntry("status", "REFUND_PENDING")
+                .containsEntry("provider_txn_id", numberOf(attempt));
+        assertThat(tickets(attempt)).isZero();
+        assertProcessed(attempt.txnRef());
+    }
+
+    @Test
+    void aLateFailure_changesNothing() {
+        Attempt attempt = standingAttempt(1);
+        giveUp(attempt, "CANCELLED");
+        Map<String, String> params = unsigned(attempt, numberOf(attempt));
+        params.put("vnp_ResponseCode", "24");
+        params.put("vnp_TransactionStatus", "02");
+
+        assertThat(send(sign(params)).RspCode()).isEqualTo("02");
+
+        assertThat(payment(attempt)).containsEntry("status", "CANCELLED").containsEntry("failure_reason", "gave up");
+    }
+
+    @Test
+    void theSameLateSuccessInParallel_paysTheOrderOnce() throws Exception {
+        Attempt attempt = standingAttempt(2);
+        giveUp(attempt, "CANCELLED");
+        Map<String, String> params = paid(attempt);
+        List<Callable<TransactionResponse>> calls = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            calls.add(() -> send(params));
+        }
+
+        List<String> codes = runTogether(calls);
+
+        assertThat(codes).containsOnlyOnce("00");
+        assertThat(codes.stream().filter("02"::equals)).hasSize(7);
+        assertThat(payment(attempt)).containsEntry("status", "SUCCEEDED");
+        assertThat(tickets(attempt)).isEqualTo(2);
+        assertProcessed(attempt.txnRef());
+    }
+
+    /** As the query job leaves a payment it saw fail, or found unpaid at its last query. */
+    private void giveUp(Attempt attempt, String status) {
+        jdbc.update("update payments set status = ?, failure_reason = 'gave up', version = version + 1 "
+                + "where txn_ref = ?", status, attempt.txnRef());
+    }
+
     @Test
     void theAnswerUsesVnpaysFieldNames() {
         var body = json.readTree(json.writeValueAsString(TransactionResponse.create("00", "Confirm Success")));
@@ -309,7 +424,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
     private Attempt standingAttempt(int quantity) {
         Fixture f = fixture();
         UUID user = f.userIds().get(0);
-        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user)
+        String code = bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user, UUID.randomUUID().toString())
                 .orderCode();
         return attempt(user, code);
     }
@@ -422,5 +537,9 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         assertThat(payment(attempt)).containsEntry("status", "PENDING").containsEntry("provider_txn_id", null);
         assertThat(orderStatus(attempt)).isEqualTo("PENDING_PAYMENT");
         assertThat(tickets(attempt)).isZero();
+    }
+
+    private double ipnAnswers(String code) {
+        return Counters.value(meters, "bidtix.payment.vnpay.ipn", "code", code);
     }
 }

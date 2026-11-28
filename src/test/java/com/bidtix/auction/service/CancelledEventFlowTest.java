@@ -96,7 +96,7 @@ class CancelledEventFlowTest extends PostgresIntegrationTest {
 
     private String book(Fixture f, int quantity) {
         return bookingService.bookTicket(new BookingTicketRequest(f.eventId(), f.standingZoneId(), null, quantity),
-                customer().getPublicId()).orderCode();
+                customer().getPublicId(), UUID.randomUUID().toString()).orderCode();
     }
 
     private void pay(String orderCode) {

@@ -54,7 +54,11 @@ bidtix:
   payment:
     # An order with a payment still waiting for the provider's callback is kept this long after its deadline before its
     # stock is released (booking) or the offer passes on (auction). Customers get no extra time to pay. 0 turns it off.
-    confirmation-grace: 10m
+    confirmation-grace: 15m
+    # When the job asks VNPAY about payments still PENDING, in case the callback never arrives (Spring cron; this is
+    # every minute, at second 30). A payment is asked about 3, 10, 17 and 24 minutes after it was made, then after 1 and
+    # 24 hours. "-" turns it off, and then only the callback confirms payments.
+    status-query-cron: "30 * * * * *"
     # When the refund job asks VNPAY to refund the REFUND_PENDING payments and to confirm requested refunds (Spring cron:
     # second minute hour day month weekday; this is every minute). "-" turns both off. Note: the VNPAY sandbox has not
     # answered the refund API yet, and a payment sent to it stays claimed.
@@ -78,6 +82,8 @@ bidtix:
     enabled: true
     ttl: 24h
     processing-timeout: 2m
+    # When expired keys are deleted (Spring cron; this is every minute, at second 45). "-" turns it off.
+    cleanup-cron: "45 * * * * *"
     paths:
       - /api/v1/auctions/*/bids
       - /api/v1/orders

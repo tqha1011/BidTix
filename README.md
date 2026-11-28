@@ -38,16 +38,16 @@ The facts about this project in one place, for a portfolio, a CV or a quick revi
 | **Type** | Personal portfolio project, backend only |
 | **Author** | Tran Quang Ha ([@tqha1011](https://github.com/tqha1011)) |
 | **Period** | Started November 2026, still in progress |
-| **Stack** | Java 21, Spring Boot 4 (Web MVC, Data JPA, Security), PostgreSQL, Flyway, Redis, VNPAY, JUnit 5, Testcontainers, k6, Docker, GitHub Actions |
+| **Stack** | Java 21, Spring Boot 4 (Web MVC, Data JPA, Security), PostgreSQL, Flyway, Redis, VNPAY, JUnit 5, Testcontainers, k6, Prometheus, Grafana, Docker, GitHub Actions |
 | **Architecture** | Modular monolith, package-by-feature, layered inside each module |
-| **Evidence** | 541 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
+| **Evidence** | 549 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 6 [architecture decision records](docs/ADR) |
 
 **The problem.** When a popular concert goes on sale, thousands of requests compete for the same seats within seconds,
 clients retry, payment results arrive late or twice, and unpaid orders must give their stock back. Each of these can
 sell a ticket twice, lose money or lock inventory for good.
 
 **What was built.** Registration and login with rotating refresh tokens, venue and event management, booking of seated
-and standing tickets, English auctions with anti-sniping and second-chance offers, VNPAY payments and a refund job, event cancellation with refunds, ticket check-in,
+and standing tickets, English auctions with anti-sniping and second-chance offers, VNPAY payments and a refund job, event cancellation with refunds, ticket check-in, a per-user ticket limit,
 all on one PostgreSQL database with Redis used only where losing it cannot break correctness.
 
 **Highlights**
@@ -76,8 +76,7 @@ payment gateway integration, caching and rate limiting with Redis, JWT authentic
 testing, benchmarking and load testing, writing architecture decision records.
 
 **Scope of these claims.** Payments run against VNPAY's sandbox only, and refunds are not proven there yet. All
-performance figures come from simulated traffic on one laptop. There is no web or mobile client. The per-user ticket limit is
-not built. See [Limitations and roadmap](#limitations-and-roadmap).
+performance figures come from simulated traffic on one laptop. There is no web or mobile client. See [Limitations and roadmap](#limitations-and-roadmap).
 
 **Quoting the performance figures** (for a portfolio or a CV):
 
@@ -177,6 +176,7 @@ sequenceDiagram
     else No flag, expired flag or Redis down
         rect rgba(127, 127, 127, 0.15)
             Note over B,DB: One transaction
+            B->>DB: Lock this buyer and event, check the ticket limit
             B->>DB: Insert order, PENDING_PAYMENT
             B->>DB: Conditional UPDATE takes seats or counter stock
         end
@@ -194,7 +194,8 @@ sequenceDiagram
 
 ### Payment: from redirect to ticket
 
-Only VNPAY's server-to-server callback records a payment. The page the browser returns to is read-only.
+VNPAY's server-to-server callback records a payment, and when none arrives a job asks VNPAY. The page the browser
+returns to is read-only.
 
 ```mermaid
 sequenceDiagram
@@ -260,13 +261,14 @@ sequenceDiagram
 | Auction closing | every minute | ended auctions go to the winner, or fail and release the ticket |
 | Offer expiry | every minute | an unpaid offer passes to the next bidder, at that bidder's own bid |
 | Unpaid order cancellation | every minute | expired booking orders are cancelled and their stock returns, 100 per transaction |
+| Payment status query | every minute | asks VNPAY about payments still unconfirmed, and records the result |
 | Refunds | every minute | requests refunds from VNPAY and confirms their outcome |
 | Cancelled events, auctions | every 5 s | calls off open auctions, with their offer and unpaid order |
 | Cancelled events, orders | every 5 s | cancels unpaid orders, and paid ones with their tickets, marking the payment for refund |
 
 Every job claims rows with `FOR UPDATE SKIP LOCKED`, so several application instances can run them. An expired order
-or offer with a payment still unconfirmed is kept 10 minutes longer, so a late callback does not punish a customer who
-paid in time.
+or offer with a payment still unconfirmed is kept 15 minutes longer, so a late or lost callback does not punish a
+customer who paid in time.
 
 ### Cancelling an event
 
@@ -332,7 +334,12 @@ stateDiagram-v2
     [*] --> PENDING
     PENDING --> SUCCEEDED: applied to the order
     PENDING --> FAILED: declined
+    PENDING --> CANCELLED: still unpaid at the last query
     PENDING --> REFUND_PENDING: money cannot be applied
+    FAILED --> SUCCEEDED: late success, applied
+    FAILED --> REFUND_PENDING: late success, too late
+    CANCELLED --> SUCCEEDED: late success, applied
+    CANCELLED --> REFUND_PENDING: late success, too late
     SUCCEEDED --> REFUND_PENDING: event cancelled
     REFUND_PENDING --> REFUNDED: VNPAY confirms
 ```
@@ -350,6 +357,7 @@ stateDiagram-v2
 | Most requests lose once an event sells out | Redis flag that can only refuse, never grant; fails open ([ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md)) | Benchmarked on and off |
 | Unpaid orders keep stock locked | Batched cancellation with `SKIP LOCKED`; a failing batch is retried order by order | Several jobs at once give each order back once |
 | An event is called off after tickets were sold | One status change, then jobs that look for cancelled events; one transaction per paid order; an event is marked done only after a settle window | Several jobs at once refund each order once |
+| One buyer sends many orders at once to get past the ticket limit | A PostgreSQL advisory lock per buyer and event, then a count of their unpaid and paid tickets | 12 requests at once with a limit of 4: exactly 4 succeed |
 | Two gates scan the same QR code | One conditional `UPDATE` from `VALID` to `USED`; the row count decides who gets in | 10 scans at once: one admitted |
 | Many requests miss the cache together | Cache-aside with TTLs, evicted on write, with a locking cache writer | 16 simultaneous misses: one database load |
 | Stolen refresh token | Rotation with reuse detection; only token hashes are stored | Reuse revokes all of that user's sessions |
@@ -485,23 +493,56 @@ The API reference is generated from the code: <http://localhost:8080/swagger-ui/
 does not read `.env` by itself). VNPAY must be able to reach the callback URL over public HTTPS, so local testing
 needs a tunnel. Setting `bidtix.payment.refund-cron` to `-` turns the refund jobs off.
 
+### Monitoring
+
+Runs the application in a container, with Prometheus and Grafana beside it:
+
+```bash
+make keys           # once: the application will not start without the signing keys
+docker compose -f compose.yaml -f compose-app.yaml -f monitoring/compose.observability.yaml up -d --build
+```
+
+| Address | What it is |
+|---|---|
+| <http://localhost:3000/d/bidtix-overview> | Grafana, "BidTix Overview" dashboard (`admin` / `admin` unless `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD` are set) |
+| <http://localhost:9090/alerts> | Prometheus alerts |
+| <http://localhost:8080/swagger-ui/index.html> | the API |
+
+- The dashboard shows HTTP traffic and latency, the JVM, database connections and request threads, payments and
+  background work.
+- Four [alert rules](monitoring/prometheus/alert.rule.yml): application down, many server errors, a background job that
+  skipped an item, a refund that needs a person. The command for their unit tests is at the top of
+  [the test file](monitoring/prometheus/alert.rule.test.yml).
+- The metrics port (9001) is not published. The application listens on it only on an internal Docker network that it
+  shares with Prometheus; the Docker host can still reach it.
+- The application container runs as UID and GID 1000 so that it can read the private key: set `HOST_UID` and
+  `HOST_GID` if yours differ. `VNP_*` variables from the shell or `.env` are passed to it.
+- The network uses the subnet `10.89.0.0/24`; change it in `compose-app.yaml` if it is already taken.
+
 ## Limitations and roadmap
 
 Known limits:
 
-- Refunds have not been seen to work on the VNPAY sandbox, and nothing reconciles payments left pending.
+- Neither refunds nor the query about unconfirmed payments have been seen to work on the VNPAY sandbox. A payment whose
+  last query, a day later, gets no usable answer stays pending.
 - An idempotency key is stored outside the business transaction: a crash between the two lets the same request run
-  once more after a timeout.
+  once more. A repeated booking then gets the order it already made, because the order keeps the key; a repeated bid is
+  refused by the price rule and a repeated payment request makes another attempt. The booking gate benchmark has not been
+  run again since a refused booking gained a read.
 - This is not hexagonal architecture: entities are JPA entities and services call repositories directly. Module
   boundaries are a convention that no test enforces.
 - Only customers can register; organizer and admin accounts come from the seed or from SQL.
 - A cancelled event is cleaned up within seconds, not in the request. It is marked done 5 minutes later, which
   assumes no request that was running at the cancellation takes longer.
+- The load test and booking gate figures were measured before the per-user ticket limit added a lock and a count to
+  every booking. The booking gate benchmark shares 50 users among its threads, so it would now also measure that lock.
 - The sample data's paid orders have no payment, so cancelling a seeded event leaves them paid and logs an error on
   every run.
 - Reading an event counts its free seats with a query that PostgreSQL can plan as a scan of the whole seat table. With
   600,000 seats in one zone it did, and the database used all its CPUs on it. The load test spreads those seats over
   zones of 1,000; the query is unchanged ([load test log](docs/load-test-log.md), run 22).
+- The monitoring stack is a local setup, not a production one: no Alertmanager, so nobody is notified of an alert,
+  default passwords, no TLS, `latest` images of Prometheus and Grafana, and CI does not run the alert tests.
 
 Done:
 
@@ -510,16 +551,17 @@ Done:
 - [x] Booking of seats and standing tickets, cancellation of unpaid orders
 - [x] Auctions: bidding, anti-sniping, closing, second-chance offers, leaderboard
 - [x] VNPAY payments, idempotent callback, grace period, refund job
+- [x] Asking VNPAY about payments whose callback never came
 - [x] Idempotency keys, Redis cache, rate limits, booking gate
 - [x] Concurrency tests, benchmarks and load tests
 - [x] Cancelling an event: auctions called off, orders cancelled, payments marked for refund
 - [x] Ticket check-in at the gate
+- [x] Per-user ticket limit
+- [x] Observability: custom metrics, a Prometheus endpoint kept off the public ports, a Grafana dashboard and alert rules
 
 Next:
 
 - [ ] Refunds proven on the VNPAY sandbox
-- [ ] Per-user ticket limit
-- [ ] Observability: a secured Prometheus endpoint
 
 ## Documentation
 
@@ -530,6 +572,7 @@ Next:
   - [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md): take standing-zone stock with a conditional UPDATE
   - [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md): refuse known sold-out requests with a short-lived Redis flag
   - [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md): confirm VNPAY payments in the IPN callback
+  - [ADR-0006](docs/ADR/0006-ask-vnpay-about-payments-left-pending.md): ask VNPAY about payments left pending
 - [`docs/benchmarks.md`](docs/benchmarks.md): benchmarks and load tests, with method and caveats
 - [`docs/load-test-log.md`](docs/load-test-log.md): every load test run with its raw results
 - [`CLAUDE.md`](CLAUDE.md): conventions and rules for working in this repository

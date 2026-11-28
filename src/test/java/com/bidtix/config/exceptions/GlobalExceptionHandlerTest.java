@@ -1,5 +1,7 @@
 package com.bidtix.config.exceptions;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.bidtix.config.metrics.Metrics;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import org.junit.jupiter.api.BeforeEach;
@@ -39,7 +41,7 @@ class GlobalExceptionHandlerTest {
     @BeforeEach
     void setUp() {
         mvc = MockMvcBuilders.standaloneSetup(new ThrowingController())
-                .setControllerAdvice(new GlobalExceptionHandler())
+                .setControllerAdvice(new GlobalExceptionHandler(new Metrics(new SimpleMeterRegistry())))
                 .build();
     }
 

@@ -13,6 +13,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.time.Instant;
+import java.util.UUID;
 
 @Getter
 @Entity
@@ -47,6 +48,13 @@ public class IdempotencyKey extends AuditableEntity {
     @JdbcTypeCode(SqlTypes.JSON)
     @Column(name = "response_body", columnDefinition = "jsonb")
     private String responseBody;
+
+    /**
+     * Names the run of the request that holds the key, new at each claim and takeover: only that run may complete or
+     * release it. Null only for rows written before it was stored.
+     */
+    @Column(name = "claim_token")
+    private UUID claimToken;
 
     @Column(name = "expires_at", nullable = false, updatable = false)
     private Instant expiresAt;

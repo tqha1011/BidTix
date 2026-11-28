@@ -22,7 +22,11 @@ public class SecurityConfiguration {
             "/swagger-ui/**",
             "/v3/api-docs/**",
             "/api/v1/payments/vnpay/return",
-            "/api/v1/payments/vnpay/ipn"
+            "/api/v1/payments/vnpay/ipn",
+            // Open on every port. Prometheus cannot send a short-lived JWT, so /actuator/prometheus may only be exposed
+            // together with a management port of its own, as application-monitoring.yaml does.
+            "/actuator/health",
+            "/actuator/prometheus"
     };
 
     /**

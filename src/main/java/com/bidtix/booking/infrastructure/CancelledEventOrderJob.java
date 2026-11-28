@@ -1,5 +1,7 @@
 package com.bidtix.booking.infrastructure;
 
+import com.bidtix.config.metrics.Metrics.Job;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.booking.domain.Order;
 import com.bidtix.booking.domain.OrderItem;
 import com.bidtix.booking.infrastructure.OrderStockReleaser.Released;
@@ -52,6 +54,7 @@ public class CancelledEventOrderJob {
     private final OrderStockReleaser stockReleaser;
     private final RefundRequestService refundRequests;
     private final EventRepository eventRepository;
+    private final Metrics metrics;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
 
@@ -93,6 +96,7 @@ public class CancelledEventOrderJob {
             try {
                 cancelled += cancelInTransaction(List.of(orderId));
             } catch (RuntimeException e) {
+                metrics.jobItemFailed(Job.CANCELLED_EVENT_ORDERS);
                 log.error("Could not cancel order {} of a cancelled event; it is retried on the next run", orderId, e);
             }
         }
@@ -130,6 +134,7 @@ public class CancelledEventOrderJob {
                         refunded++;
                     }
                 } catch (RuntimeException e) {
+                    metrics.jobItemFailed(Job.CANCELLED_EVENT_ORDERS);
                     log.error("Could not refund order {} of a cancelled event; it is retried on the next run", orderId, e);
                 }
             }

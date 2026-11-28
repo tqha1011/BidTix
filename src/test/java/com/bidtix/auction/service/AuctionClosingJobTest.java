@@ -1,5 +1,7 @@
 package com.bidtix.auction.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import static com.bidtix.support.Counters.jobFailures;
 import com.bidtix.auction.dtos.CreateAuctionRequest;
 import com.bidtix.auction.infrastructure.AuctionClosingJob;
 import com.bidtix.auction.service.AuctionFixtures.Fixture;
@@ -38,6 +40,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AuctionClosingJobTest extends PostgresIntegrationTest {
 
     @Autowired AuctionClosingJob job;
+    @Autowired MeterRegistry meters;
     @Autowired AuctionService auctionService;
     @Autowired BookingGateway gateway;
     @Autowired UserRepository users;
@@ -223,7 +226,11 @@ class AuctionClosingJobTest extends PostgresIntegrationTest {
                 + "ends_at = now() - interval '1 minute', current_price = 140000, bid_count = 1, "
                 + "leading_bidder_id = ? where public_id = ?", bidder().getId(), broken);
 
+        double failuresBefore = jobFailures(meters, "auction_closing");
+
         job.closeAuction();
+
+        assertThat(jobFailures(meters, "auction_closing")).as("the failed item is counted").isGreaterThan(failuresBefore);
 
         assertThat(statusOf(good)).isEqualTo("AWAITING_PAYMENT");
         assertThat(statusOf(broken)).as("rolled back, retried on the next run").isEqualTo("LIVE");

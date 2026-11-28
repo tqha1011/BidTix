@@ -14,6 +14,7 @@ import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -73,6 +74,9 @@ public interface TicketRepository extends JpaRepository<Ticket, Long> {
                       @Param("now") Instant now);
 
     Optional<Ticket> findByPublicIdAndEventId(UUID publicId, Long eventId);
+
+    /** The tickets of one order, in the order they were issued. */
+    List<Ticket> findByOrderIdOrderById(Long orderId);
 
     /** What the gate sees. The seat is a LEFT join because a general-admission ticket has none. */
     @Query("select new com.bidtix.booking.dtos.CheckInResponse(t.publicId, e.title, z.name, s.rowLabel, s.seatNumber, " +

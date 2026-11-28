@@ -1,5 +1,7 @@
 package com.bidtix.auction.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import static com.bidtix.support.Counters.jobFailures;
 import com.bidtix.auction.dtos.CreateAuctionRequest;
 import com.bidtix.auction.infrastructure.AuctionClosingJob;
 import com.bidtix.auction.infrastructure.AuctionOfferExpiryJob;
@@ -42,6 +44,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
 
     @Autowired AuctionOfferExpiryJob job;
+    @Autowired MeterRegistry meters;
     @Autowired AuctionClosingJob closingJob;
     @Autowired AuctionService auctionService;
     @Autowired BookingGateway gateway;
@@ -206,7 +209,7 @@ class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
         assertThat(available(f)).as("the ticket is sold, not back on the counter").isEqualTo(9);
     }
 
-    // ---- a payment that may still be confirmed (bidtix.payment.confirmation-grace: 10m) ------------
+    // ---- a payment that may still be confirmed (bidtix.payment.confirmation-grace: 15m) ------------
 
     @Test
     void anExpiredOfferWithAPendingPayment_isKept_soAPaymentMadeInTimeStillWins() {
@@ -232,7 +235,7 @@ class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
         Fixture f = fixture(10);
         UUID auction = awaitingPayment(standing(f, null), new Bidding(bidder(), 500_000), new Bidding(bidder(), 450_000));
         pendingPayment(((Number) offer(auction, 1).get("order_id")).longValue());
-        jdbc.update("update auction_offers set expires_at = now() - interval '11 minutes' where offer_rank = 1 "
+        jdbc.update("update auction_offers set expires_at = now() - interval '16 minutes' where offer_rank = 1 "
                 + "and auction_id = (select id from auctions where public_id = ?)", auction);
 
         job.expireOffers();
@@ -242,6 +245,25 @@ class AuctionOfferExpiryJobTest extends PostgresIntegrationTest {
     }
 
     // ---- when it is not time, or not ours --------------------------------------------------------
+
+    @Test
+    void anOfferThatCannotBeHandled_isCounted_andKeptForLater() {
+        Fixture f = fixture(10);
+        UUID auction = awaitingPayment(standing(f, null), new Bidding(bidder(), 150_000));
+        long orderId = ((Number) offer(auction, 1).get("order_id")).longValue();
+        // neither unpaid nor paid although its offer is open: nothing the job can do with it
+        jdbc.update("update orders set status = 'CANCELLED' where id = ?", orderId);
+        expire(auction, 1);
+        double failuresBefore = jobFailures(meters, "offer_expiry");
+
+        job.expireOffers();
+
+        assertThat(jobFailures(meters, "offer_expiry")).as("the failed item is counted").isGreaterThan(failuresBefore);
+        assertThat(offer(auction, 1)).containsEntry("status", "PENDING");
+        // otherwise the scheduled job keeps failing on it for as long as the tests run
+        jdbc.update("update auction_offers set status = 'EXPIRED' where order_id = ?", orderId);
+        jdbc.update("update auctions set status = 'CANCELLED' where public_id = ?", auction);
+    }
 
     @Test
     void anOfferStillInItsPaymentWindow_isLeftAlone() {

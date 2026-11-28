@@ -106,7 +106,7 @@ class ManageZoneApiTest extends ApiTest {
         UUID event = Catalog.event(jdbc, me, "PUBLISHED");
         UUID zone = Catalog.seatedZone(jdbc, event, 2);
         bookingService.bookTicket(new BookingTicketRequest(event, zone, List.of(Catalog.seats(jdbc, zone).get(0)), null),
-                user("CUSTOMER"));
+                user("CUSTOMER"), UUID.randomUUID().toString());
         // booking refuses a draft; this is the database's guard should one ever have orders
         jdbc.update("update events set status = 'DRAFT' where public_id = ?", event);
 

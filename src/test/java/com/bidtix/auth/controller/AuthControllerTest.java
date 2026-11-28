@@ -1,5 +1,7 @@
 package com.bidtix.auth.controller;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.auth.dtos.AuthTokens;
 import com.bidtix.auth.infrastructure.AuthProperties;
 import com.bidtix.auth.service.AuthService;
@@ -44,7 +46,7 @@ class AuthControllerTest {
                 new AuthProperties.RefreshCookie(COOKIE_NAME, "/api/v1/auth", true, "Strict"));
         mvc = MockMvcBuilders
                 .standaloneSetup(new AuthController(authService, new RefreshTokenCookies(properties)))
-                .setControllerAdvice(new GlobalExceptionHandler())
+                .setControllerAdvice(new GlobalExceptionHandler(new Metrics(new SimpleMeterRegistry())))
                 .build();
     }
 

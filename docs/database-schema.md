@@ -30,6 +30,12 @@ Version numbers are global across modules, so a new migration always takes the n
 | V18 | `payment` | `payments.refund_attempts`, `payments.refund_next_attempt_at` (retrying a refund request) |
 | V19 | `payment` | `payments.refund_queries`, `payments.refund_next_query_at` (asking about a requested refund) |
 | V20 | `event` | `events.cancelled_at`, `events.auctions_cleaned_at`, `events.orders_cleaned_at` (cleaning up a cancelled event) |
+| V21 | `payment` | `payments.status_queries`, `payments.next_status_query_at` (asking about a payment left `PENDING`) |
+| V22 | `payment` | partial index `idx_payments_pending_requested_at` (reading the `PENDING` payments to ask about) |
+| V23 | `payment` | payment status `CANCELLED` (still unpaid at the last query) |
+| V24 | `booking` | `orders.idempotency_key`, partial unique `ux_orders_user_idempotency_key` (one order per user and key) |
+| V25 | `common` | `idx_idempotency_keys_expires_at` (deleting expired keys) |
+| V26 | `common` | `idempotency_keys.claim_token` (which run of a request holds the key) |
 
 ## Conventions
 
@@ -81,6 +87,8 @@ users ──< idempotency_keys
   `PAID → REFUNDED`, or `PAID → CANCELLED` when the event is cancelled. `paid_at` is required once paid.
 - `orders.order_code`: `VARCHAR(20)`, `NOT NULL`, `UNIQUE`, shape `ORDER_<digits>`. The unique constraint is
   the safety net, so code generation must cope with a collision (retry), especially under concurrent orders.
+- `orders.idempotency_key` is the `Idempotency-Key` of the request that made a booking order, unique per user, `NULL`
+  for auction orders. It is written with the order, so it holds even when `idempotency_keys` no longer knows the key.
 - `order_items.unit_price` is a price snapshot. A seated item always has `quantity = 1`.
 - `tickets` exist only after a successful payment. `used_at` is set exactly when the status is `USED` (check-in).
 
@@ -95,16 +103,22 @@ users ──< idempotency_keys
   holds the payment back, and `refund_attempts` (counted at each claim) ends the retries after 5.
 - A requested refund is asked about with querydr: `refund_queries` counts the scheduled queries (10 at most, set to the
   limit when the refund is rejected) and `refund_next_query_at` spaces them out.
+- A payment left `PENDING` is asked about with querydr: `status_queries` counts the queries (6 at most) and
+  `next_status_query_at` spaces them out. Taking a query leaves `version` unchanged
+  ([ADR-0006](ADR/0006-ask-vnpay-about-payments-left-pending.md)).
 - `payments.requested_at` is exactly the `vnp_CreateDate` sent to VNPAY (whole seconds). Its query and refund APIs need
   it as `vnp_TransactionDate`. `NULL` for payments made before V16.
 - `ux_payments_one_succeeded_per_order` (V15): at most one `SUCCEEDED` payment per order. A second confirmed payment for
   the same order is stored as `REFUND_PENDING`, as is one that arrives after the order expired or was cancelled.
-- A payment moves `PENDING → SUCCEEDED | FAILED | REFUND_PENDING`, then `REFUND_PENDING → REFUNDED`, set only when
+- A payment moves `PENDING → SUCCEEDED | FAILED | CANCELLED | REFUND_PENDING` (`CANCELLED`: the last query about it
+  still found no payment; a successful callback later still moves a `FAILED` or `CANCELLED` payment to `SUCCEEDED` or
+  `REFUND_PENDING`), then `REFUND_PENDING → REFUNDED`, set only when
   VNPAY's querydr reports the full refund as successful. `provider_txn_id` is not stored for a failed transaction.
   Cancelling an event also moves the `SUCCEEDED` payments of its orders to `REFUND_PENDING`.
 - `payment_webhook_events` is an inbox: every callback with a valid signature, one row per
   `UNIQUE (provider, provider_event_id)` (VNPAY: `vnp_TxnRef:vnp_TransactionStatus`), with the payload.
-  `processed_at` is set in the transaction that records the result; a row without it is still unhandled. A repeat adds
+  `processed_at` is set in the transaction that records the result, or afterwards for a callback that agrees with a
+  result already recorded; a row without it is still unhandled. A repeat adds
   no row, and the row does not decide whether a delivery is processed: the payment's status does
   ([ADR-0005](ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)).
 - A successful payment for an order that is `CANCELLED` (or already paid) is stored as `REFUND_PENDING`, not applied,
@@ -128,7 +142,9 @@ users ──< idempotency_keys
 
   `IdempotencyFilter` (`common/idempotency`, runs after Spring Security) does this for the routes in
   `bidtix.idempotency.paths`. The key is claimed with `INSERT ... ON CONFLICT DO NOTHING` before the request runs, and
-  the response is stored after it, only for a 2xx; any other outcome deletes the key so a retry runs again. These are
+  the response is stored after it, only for a 2xx; any other outcome deletes the key so a retry runs again. Each claim and
+  takeover writes a new `claim_token`, and storing or deleting requires it, so an earlier run cannot touch a later one's
+  row. These are
   separate transactions from the business change: if the server dies between the business commit and storing the
   response, the key stays `PROCESSING` and, after `processing-timeout`, the same request runs once more. A flow whose
   repeat is harmful needs its own guard in the business transaction (for a bid: `UNIQUE (auction_id, amount)` and the
@@ -140,7 +156,7 @@ users ──< idempotency_keys
 |---|---|
 | Hold `SEATED` seats | Optional Redis `SET seat:{id} NX PX <ttl>` fast-reject. Then in the DB: `UPDATE seats SET status='HELD', held_by_order_id=?, hold_expires_at=? WHERE id IN (...) AND status='AVAILABLE'`, with ids in ascending order. If affected rows ≠ requested seats, roll back. |
 | Buy GA | `UPDATE ticket_zones SET available_quantity = available_quantity - :n WHERE id = :id AND available_quantity >= :n`. 0 rows means sold out. |
-| Per-user ticket limit | `pg_advisory_xact_lock(user_id, event_id)` in the order transaction, then count existing tickets + pending items. |
+| Per-user ticket limit | `pg_advisory_xact_lock(user_id, event_id)` in the order transaction, before the stock is taken, then the sum of the user's `BOOKING` order items of the event in `PENDING_PAYMENT` or `PAID`. A cancelled order stops counting by itself; auction orders never count. |
 | Hold expiry | `@Scheduled` sweeper: `... WHERE status='PENDING_PAYMENT' AND expires_at < now() FOR UPDATE SKIP LOCKED`. It cancels the order and releases seats/quantity; an order with a `PENDING` payment only after `bidtix.payment.confirmation-grace` more (the callback may be on its way). The race with the payment webhook is settled by `UPDATE orders ... WHERE status='PENDING_PAYMENT'`, so only one of them wins. |
 | Confirm a payment (provider callback) | Verify the signature, store the callback (`INSERT ... ON CONFLICT DO NOTHING`, own transaction). Then in one transaction: `UPDATE orders ... WHERE status='PENDING_PAYMENT'`, tickets, and `UPDATE payments ... WHERE status='PENDING' AND version=?`. 0 payment rows means another delivery won: roll back. |
 | Place bid | A single conditional update on `auctions` (`status='LIVE' AND now() < ends_at AND :amt >= COALESCE(current_price + min_increment, start_price)`) that also bumps `bid_count`, `version` and extends `ends_at` inside the anti-snipe window. On 1 row, insert into `bids` in the same transaction. |
@@ -163,4 +179,4 @@ Add these once queries exist and are measured with `EXPLAIN`:
 - `orders(status, expires_at)` for the sweeper, `orders(user_id, created_at DESC)` for history
 - `auctions(status, ends_at)` for the closing job, `bids(auction_id, amount DESC)` for top bids
 - `seats(zone_id, status)` for the seat map (`events(status, starts_at)` for listing was added in V14)
-- `idempotency_keys(expires_at)` and `refresh_tokens(expires_at)` for cleanup
+- `refresh_tokens(expires_at)` for cleanup (`idempotency_keys(expires_at)` was added in V25)

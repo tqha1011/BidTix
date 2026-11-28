@@ -1,0 +1,20 @@
+# Profile "monitoring" (make run-monitoring): metrics for Prometheus on a management port of their own.
+# /actuator/prometheus needs no token (see SecurityConfiguration), so expose it only together with that port, which
+# listens on loopback unless MANAGEMENT_ADDRESS says otherwise.
+management:
+  server:
+    port: 9001
+    address: ${MANAGEMENT_ADDRESS:127.0.0.1}
+  endpoints:
+    web:
+      exposure:
+        include: health,prometheus
+  metrics:
+    distribution:
+      percentiles-histogram:
+        http.server.requests: true   # histogram buckets, for p95 in Grafana
+
+server:
+  tomcat:
+    mbeanregistry:
+      enabled: true   # Tomcat's thread metrics

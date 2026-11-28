@@ -131,7 +131,8 @@ public class DevDataSeeder implements ApplicationRunner {
         List<UUID> seats = seatRepository.findAllAvailableSeatByTicketZoneId(zoneId).stream()
                 .limit(count).map(seat -> seat.getPublicId()).toList();
         var booked = bookingService.bookTicket(
-                new BookingTicketRequest(event.publicId(), zone.publicId(), seats, null), customer.getPublicId());
+                new BookingTicketRequest(event.publicId(), zone.publicId(), seats, null), customer.getPublicId(),
+                UUID.randomUUID().toString());
         var order = payableOrders.findOwnOrder(booked.orderCode(), customer.getPublicId()).orElseThrow();
         payableOrders.applyPayment(order.id(), clock.instant());
     }

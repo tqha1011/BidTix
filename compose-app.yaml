@@ -1,0 +1,50 @@
+services:
+  app:
+    build: .
+    container_name: 'bidtix-app'
+    restart: unless-stopped
+    # the heap is 75% of this (Dockerfile); below about 1.8 GB the JVM would pick the serial garbage collector
+    mem_limit: 2g
+    # keys/private.pem is readable by its owner only (600), so the process runs as that user instead of the image's own
+    user: '${HOST_UID:-1000}:${HOST_GID:-1000}'
+    depends_on:
+      database:
+        condition: service_healthy
+      cache:
+        condition: service_healthy
+    environment:
+      - 'SPRING_PROFILES_ACTIVE=monitoring'
+      - 'MANAGEMENT_ADDRESS=10.89.0.10'              # port 9001 listens on bidtix-scrape only
+      - 'SPRING_DATASOURCE_URL=jdbc:postgresql://database:5432/${POSTGRES_DB:-mydb}'
+      - 'SPRING_DATASOURCE_USERNAME=${POSTGRES_USER:-myuser}'
+      - 'SPRING_DATASOURCE_PASSWORD=${POSTGRES_PASSWORD:-mypassword}'
+      - 'SPRING_DATA_REDIS_HOST=cache'
+      - 'REDIS_PASSWORD=${REDIS_PASSWORD:-secret}'
+      - 'JWT_PUBLIC_KEY=file:/keys/public.pem'
+      - 'JWT_PRIVATE_KEY=file:/keys/private.pem'
+      # Name only: passed through when set in the shell or .env, otherwise the default in application.yaml applies
+      - 'VNP_TMNCODE'
+      - 'VNP_HASH_SECRET'
+      - 'VNP_URL'
+      - 'VNP_RETURN_URL'
+      - 'VNP_IPN_URL'
+      - 'VNP_REFUND_URL'
+
+    volumes:
+      - './keys:/keys:ro'
+
+    ports:
+      - '127.0.0.1:${APP_PORT:-8080}:8080'
+
+    networks:
+      bidtix-backend:
+      bidtix-scrape:
+        ipv4_address: 10.89.0.10
+
+networks:
+  bidtix-scrape:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.89.0.0/24

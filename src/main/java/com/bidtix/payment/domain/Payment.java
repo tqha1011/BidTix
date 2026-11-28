@@ -79,6 +79,14 @@ public class Payment extends AuditableEntity {
     @Column(name = "refund_next_query_at")
     private Instant refundNextQueryAt;
 
+    /** How many times the provider has been asked about this payment while it was PENDING. */
+    @Column(name = "status_queries", nullable = false)
+    private int statusQueries;
+
+    /** Do not ask the provider about this PENDING payment before this moment; null when no query has been planned. */
+    @Column(name = "next_status_query_at")
+    private Instant nextStatusQueryAt;
+
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 20)
     private PaymentStatus status = PaymentStatus.PENDING;

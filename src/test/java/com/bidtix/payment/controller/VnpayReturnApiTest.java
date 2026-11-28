@@ -98,7 +98,7 @@ class VnpayReturnApiTest extends ApiTest {
         UUID event = Catalog.event(jdbc, user("ORGANIZER"), "PUBLISHED");
         UUID zone = Catalog.standingZone(jdbc, event, 10, 10);
         UUID me = user("CUSTOMER");
-        String code = bookingService.bookTicket(new BookingTicketRequest(event, zone, null, 1), me).orderCode();
+        String code = bookingService.bookTicket(new BookingTicketRequest(event, zone, null, 1), me, UUID.randomUUID().toString()).orderCode();
         String url = paymentService.createUrlPayment(code, me, "203.0.113.7");
         return new Attempt(code, UriComponentsBuilder.fromUriString(url).build().getQueryParams().getFirst("vnp_TxnRef"));
     }

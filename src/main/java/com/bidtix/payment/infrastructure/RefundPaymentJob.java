@@ -1,5 +1,7 @@
 package com.bidtix.payment.infrastructure;
 
+import com.bidtix.config.metrics.Metrics.Job;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.payment.domain.Payment;
 import com.bidtix.payment.domain.PaymentStatus;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,7 @@ public class RefundPaymentJob {
     private final TransactionTemplate transactionTemplate;
     private static final Integer MAX_REFUND_REQUEST = 100;
     private final Clock clock;
+    private final Metrics metrics;
     private static final String VNPAY_SUCCESS = "00";
     /** vnp_TransactionType of a refund record: the whole amount, or a part of it. */
     private static final String VNPAY_FULL_REFUND = "02";
@@ -52,7 +55,7 @@ public class RefundPaymentJob {
     /** The wait after the 1st, 2nd, ... request that never reached VNPAY; the last one repeats. */
     private static final List<Duration> RETRY_WAITS =
             List.of(Duration.ofMinutes(1), Duration.ofMinutes(5), Duration.ofMinutes(30));
-    private static final int MAX_REFUND_ATTEMPTS = 5;
+    static final int MAX_REFUND_ATTEMPTS = 5;
     /** The wait after the 1st, 2nd, ... scheduled query about a refund; the last one repeats. */
     private static final List<Duration> QUERY_WAITS = List.of(Duration.ofMinutes(1), Duration.ofMinutes(5),
             Duration.ofMinutes(30), Duration.ofHours(2), Duration.ofHours(12));
@@ -88,6 +91,7 @@ public class RefundPaymentJob {
                 }
                 catch(RuntimeException e){
                     // e.g. the database while recording the outcome: the claim stays, the others still go on
+                    metrics.jobItemFailed(Job.REFUND);
                     log.error("Refund of payment {} could not be handled", payment.getTxnRef(), e);
                 }
             }
@@ -191,6 +195,7 @@ public class RefundPaymentJob {
             handleQueryResponse(response, payment);
         }
         catch(RuntimeException e){
+            metrics.jobItemFailed(Job.REFUND);
             log.warn("Could not confirm the refund of payment {}: {}", payment.getTxnRef(), e.toString());
         }
     }
@@ -212,6 +217,7 @@ public class RefundPaymentJob {
             recordRefundFailure(payment, problem + ", gave up after " + attempt + " attempts");
             return;
         }
+        metrics.jobItemFailed(Job.REFUND);
         Duration wait = RETRY_WAITS.get(Math.min(attempt, RETRY_WAITS.size()) - 1);
         Instant now = clock.instant();
         String reason = failureReason(payment, problem);
@@ -345,6 +351,7 @@ public class RefundPaymentJob {
     /** Notes the problem next to the reason the refund is needed, in a transaction of its own. The claim stays. */
     private void recordRefundFailure(Payment payment, String problem){
         String reason = failureReason(payment, problem);
+        metrics.jobItemFailed(Job.REFUND);
         log.error("Refund of payment {} failed: {}", payment.getTxnRef(), problem);
         int updated = transactionTemplate.execute(tx ->
                 paymentRepository.recordRefundFailure(payment.getId(), reason, clock.instant()));

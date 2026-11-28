@@ -133,7 +133,7 @@ class BookingGateBenchmarkTest extends PostgresIntegrationTest {
                     start.await();
                     long t0 = System.nanoTime();
                     try {
-                        bookingService.bookTicket(request, user);
+                        bookingService.bookTicket(request, user, UUID.randomUUID().toString());
                         outcomes[index] = Outcome.SOLD;
                     } catch (BusinessException e) {
                         outcomes[index] = classify(e);

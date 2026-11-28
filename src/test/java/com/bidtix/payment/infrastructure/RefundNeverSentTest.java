@@ -1,5 +1,7 @@
 package com.bidtix.payment.infrastructure;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import static com.bidtix.support.Counters.jobFailures;
 import com.bidtix.support.PostgresIntegrationTest;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -32,13 +34,18 @@ import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 class RefundNeverSentTest extends PostgresIntegrationTest {
 
     @Autowired RefundPaymentJob job;
+    @Autowired MeterRegistry meters;
     @Autowired JdbcTemplate jdbc;
 
     @Test
     void aRefusedConnectionGivesUpTheClaim_andSchedulesAnotherTry() {
         String payment = refundPending(jdbc);
 
+        double failuresBefore = jobFailures(meters, "refund");
+
         job.run();
+
+        assertThat(jobFailures(meters, "refund")).as("the failed item is counted").isGreaterThan(failuresBefore);
 
         Map<String, Object> row = row(jdbc, payment);
         assertThat(row).containsEntry("status", "REFUND_PENDING").containsEntry("claimed", false)
@@ -75,7 +82,11 @@ class RefundNeverSentTest extends PostgresIntegrationTest {
         String payment = refundPending(jdbc);
         jdbc.update("update payments set refund_attempts = 4 where txn_ref = ?", payment);
 
+        double failuresBefore = jobFailures(meters, "refund");
+
         job.run();
+
+        assertThat(jobFailures(meters, "refund")).as("the failed item is counted").isGreaterThan(failuresBefore);
 
         assertThat(row(jdbc, payment)).containsEntry("claimed", true).containsEntry("refund_attempts", 5);
         assertThat((String) row(jdbc, payment).get("failure_reason")).contains("gave up after 5 attempts");

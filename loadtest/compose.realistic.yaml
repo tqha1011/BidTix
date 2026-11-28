@@ -10,7 +10,7 @@ services:
       # Every simulated person comes from one address, so the limits per IP would stop the test long before the
       # application does. The limiter stays on and is still called.
       SPRING_APPLICATION_JSON: >-
-        {"bidtix": {"payment": {"refund-cron": "-"}, "rate-limit": {"policies": {
+        {"bidtix": {"payment": {"refund-cron": "-", "status-query-cron": "-"}, "rate-limit": {"policies": {
          "default-user": {"capacity": 1000000, "refill-tokens": 1000000, "refill-every": "1s"},
          "auth-login": {"limit": 1000000, "window": "1m"},
          "vnpay-ipn": {"capacity": 1000000, "refill-tokens": 1000000, "refill-every": "1s"},

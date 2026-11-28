@@ -20,7 +20,7 @@ class RefundParamsTest {
             "pay", "refund", "querydr", 15);
     private final VnpaySigner signer = new VnpaySigner(properties);
     private final RefundPaymentJob job = new RefundPaymentJob(null, properties, signer, null,
-            Clock.fixed(Instant.parse("2026-01-01T04:00:00Z"), ZoneOffset.UTC));
+            Clock.fixed(Instant.parse("2026-01-01T04:00:00Z"), ZoneOffset.UTC), null);
     private final Payment payment = new Payment(1L, PaymentProvider.VNPAY, "abc123", 10_000,
             Instant.parse("2026-01-01T03:31:11Z"));
 

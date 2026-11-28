@@ -1,5 +1,7 @@
 package com.bidtix.config.security;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.config.exceptions.GlobalExceptionHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -89,6 +91,11 @@ class SecurityErrorResponseTest {
     @Import({SecurityConfiguration.class, RestAuthenticationEntryPoint.class,
             RestAccessDeniedHandler.class, GlobalExceptionHandler.class, Probe.class})
     static class TestConfig {
+        @Bean
+        Metrics metrics() {
+            return new Metrics(new SimpleMeterRegistry());
+        }
+
         @Bean
         JwtDecoder jwtDecoder() {
             return mock(JwtDecoder.class);

@@ -42,6 +42,7 @@ public enum ErrorCode {
     ORDER_NOTFOUND(HttpStatus.NOT_FOUND, "Order not found"),
     ORDER_NOT_PAYABLE(HttpStatus.CONFLICT, "Order can no longer be paid"),
     ZONE_SOLD_OUT(HttpStatus.CONFLICT, "Not enough tickets left in this zone"),
+    TICKET_LIMIT_EXCEEDED(HttpStatus.CONFLICT, "You cannot hold that many tickets for this event"),
 
     // --- check-in ---
     TICKET_NOT_FOUND(HttpStatus.NOT_FOUND, "Ticket not found"),

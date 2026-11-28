@@ -240,7 +240,7 @@ class CheckInApiTest extends ApiTest {
 
     /** Books and pays while the sale is open, then moves the event so that its gate is open now. */
     private Gate gate(UUID organizer, UUID event, BookingTicketRequest request) {
-        String code = bookingService.bookTicket(request, user("CUSTOMER")).orderCode();
+        String code = bookingService.bookTicket(request, user("CUSTOMER"), UUID.randomUUID().toString()).orderCode();
         OrderPayments.pay(payableOrders, jdbc, code);
         move(event, "1 hour", "4 hours");
         return new Gate(organizer, event, jdbc.queryForList("select t.public_id from tickets t "

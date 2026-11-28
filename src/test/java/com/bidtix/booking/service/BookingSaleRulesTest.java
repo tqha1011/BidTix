@@ -28,7 +28,7 @@ class BookingSaleRulesTest extends ApiTest {
         UUID event = Catalog.event(jdbc, user("ORGANIZER"), "PUBLISHED");
         UUID zone = Catalog.standingZone(jdbc, event, 10, 10);
 
-        bookingService.bookTicket(new BookingTicketRequest(event, zone, null, 2), user("CUSTOMER"));
+        bookingService.bookTicket(new BookingTicketRequest(event, zone, null, 2), user("CUSTOMER"), UUID.randomUUID().toString());
 
         assertThat(available(zone)).isEqualTo(8);
     }
@@ -81,7 +81,7 @@ class BookingSaleRulesTest extends ApiTest {
 
     private void refused(UUID event, UUID zone, ErrorCode code) {
         UUID customer = user("CUSTOMER");
-        assertThatThrownBy(() -> bookingService.bookTicket(new BookingTicketRequest(event, zone, null, 1), customer))
+        assertThatThrownBy(() -> bookingService.bookTicket(new BookingTicketRequest(event, zone, null, 1), customer, UUID.randomUUID().toString()))
                 .isInstanceOfSatisfying(BusinessException.class, e -> assertThat(e.getErrorCode()).isEqualTo(code));
         assertThat(available(zone)).isEqualTo(10);
         assertThat(jdbc.queryForObject("select count(*) from orders o join users u on u.id = o.user_id "

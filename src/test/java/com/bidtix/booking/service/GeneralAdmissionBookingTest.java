@@ -130,7 +130,7 @@ class GeneralAdmissionBookingTest extends PostgresIntegrationTest {
         Fixture f = fixture(10, 1);
 
         assertThatThrownBy(() -> bookingService.bookTicket(
-                request(f, f.otherEventZoneId(), null, 1), f.userIds().get(0)))
+                request(f, f.otherEventZoneId(), null, 1), f.userIds().get(0), UUID.randomUUID().toString()))
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.ZONE_NOTFOUND));
         assertThat(orders(f)).isZero();
@@ -148,7 +148,7 @@ class GeneralAdmissionBookingTest extends PostgresIntegrationTest {
     }
 
     private BaseBookingTicketResult book(Fixture f, UUID user, int quantity) {
-        return bookingService.bookTicket(request(f, f.zoneId(), null, quantity), user);
+        return bookingService.bookTicket(request(f, f.zoneId(), null, quantity), user, UUID.randomUUID().toString());
     }
 
     private static BookingTicketRequest request(Fixture f, UUID zone, List<UUID> seats, Integer quantity) {
@@ -156,7 +156,7 @@ class GeneralAdmissionBookingTest extends PostgresIntegrationTest {
     }
 
     private void expectInvalid(BookingTicketRequest request, UUID user) {
-        assertThatThrownBy(() -> bookingService.bookTicket(request, user))
+        assertThatThrownBy(() -> bookingService.bookTicket(request, user, UUID.randomUUID().toString()))
                 .isInstanceOfSatisfying(BusinessException.class,
                         e -> assertThat(e.getErrorCode()).isEqualTo(ErrorCode.INVALID_REQUEST));
     }

@@ -12,7 +12,7 @@ import java.time.Duration;
  *                          provider's callback; zero turns the grace period off
  */
 @ConfigurationProperties(prefix = "bidtix.payment")
-public record PaymentProperties(@DefaultValue("10m") Duration confirmationGrace) {
+public record PaymentProperties(@DefaultValue("15m") Duration confirmationGrace) {
 
     public PaymentProperties {
         if (confirmationGrace.isNegative()) {

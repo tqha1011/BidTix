@@ -1,5 +1,7 @@
 package com.bidtix.config.exceptions;
 
+import lombok.RequiredArgsConstructor;
+import com.bidtix.config.metrics.Metrics;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpHeaders;
@@ -40,8 +42,11 @@ import java.util.Map;
  * framework errors (malformed JSON, unsupported method, unknown URL, ...).
  */
 @Slf4j
+@RequiredArgsConstructor
 @RestControllerAdvice
 public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
+
+    private final Metrics metrics;
 
     /** Errors our own code threw on purpose. */
     @ExceptionHandler(BusinessException.class)
@@ -117,7 +122,9 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         return problem(errorCode, errorCode.getMessage());
     }
 
+    /** Every error response built from an {@link ErrorCode} passes here, so this is where they are counted. */
     private ProblemDetail problem(ErrorCode errorCode, String detail) {
+        metrics.apiError(errorCode);
         ProblemDetail problem = ProblemDetail.forStatusAndDetail(errorCode.getStatus(), detail);
         problem.setProperty("code", errorCode.name());
         return problem;

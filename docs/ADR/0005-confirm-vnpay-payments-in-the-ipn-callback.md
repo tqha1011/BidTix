@@ -1,7 +1,9 @@
 # ADR-0005: Confirm VNPAY payments in the IPN callback, guarded by the payment's status
 
 ## Status
-Accepted. Supersedes [ADR-0002](0002-take-payment-outside-the-transaction.md).
+Accepted. Supersedes [ADR-0002](0002-take-payment-outside-the-transaction.md). Amended by
+[ADR-0006](0006-ask-vnpay-about-payments-left-pending.md): a query also confirms payments, and the grace period is 15
+minutes.
 
 ## Context
 ADR-0002 charged a mock provider synchronously inside the booking request. VNPAY does not work like that: the

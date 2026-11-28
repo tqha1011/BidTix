@@ -58,5 +58,8 @@ FROM ticket_zones z
          CROSS JOIN LATERAL generate_series(1, z.capacity) AS s
 WHERE z.zone_type = 'SEATED';
 
+-- the simulated customers book again and again: keep the per-user ticket limit out of what is measured
+UPDATE events SET max_tickets_per_user = 1000000;
+
 COMMIT;
 ANALYZE;

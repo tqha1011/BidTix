@@ -30,8 +30,8 @@ seat-hold or payment flow).
 - Payment: VNPAY (sandbox by default), redirect to VNPAY's page and an asynchronous server-to-server callback (IPN).
   Settings come from `VNP_TMNCODE`, `VNP_HASH_SECRET`, `VNP_URL`, `VNP_RETURN_URL` (`bidtix.payment.vnpay.*`); the IPN
   URL is configured on VNPAY's side (`VNP_IPN_URL` is bound but not read by the code)
-- Lombok, springdoc-openapi (Swagger UI); the Micrometer Prometheus registry is on the classpath but its
-  endpoint is not exposed yet
+- Lombok, springdoc-openapi (Swagger UI); the Micrometer Prometheus registry's endpoint is exposed
+  only in the `monitoring` profile
 - Tests: JUnit 5, Mockito, MockMvc, Spring Security test, Testcontainers (real Postgres; Docker is
   required to run the integration tests; `PostgresIntegrationTest` also starts a Redis container).
 
@@ -90,8 +90,7 @@ seat-hold or payment flow).
 > from 2 hours before it starts until it ends (`CHECK_IN_NOT_OPEN`). A ticket of another event is `TICKET_NOT_FOUND`;
 > `TICKET_ALREADY_USED` carries `usedAt`. Keep the 2 hours shorter than the 3 days' cancellation notice, so no ticket is
 > USED when an event is cancelled. Rate limit policy `check-in`.
-> Not started: enforcing `max_tickets_per_user` and querying VNPAY for payments left
-> PENDING. Refunds have not been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
+> Neither refunds nor querydr answers about a payment have been seen to work against the VNPAY sandbox. Rate limits exist for login, register, the VNPAY callback and
 > logged-in callers; any other public route needs `@RateLimited` when it is added. Cache rule: whatever adds or removes events from the public list, or changes what it shows, (publish, update and cancel do) must evict
 > `CacheConfig.EVENTS`, and whatever changes a venue must evict `CacheConfig.VENUES` and `CacheConfig.VENUE_PAGES`
 > (adding one: only `VENUE_PAGES`).
@@ -134,8 +133,40 @@ tagged `benchmark` and skipped. To reproduce a CI run locally: `make keys && ./m
 background job sets it (see `BookingGateRedisDownTest`).
 
 Swagger UI: `http://localhost:8080/swagger-ui/index.html` · OpenAPI: `/v3/api-docs`. Both are public,
-as are `/api/v1/auth/**` and the VNPAY callback routes `/api/v1/payments/vnpay/{ipn,return}`; every other route (including `/actuator/**`, where only `health` is exposed)
-needs a Bearer token.
+as are `/api/v1/auth/**`, the VNPAY callback routes `/api/v1/payments/vnpay/{ipn,return}`, `/actuator/health` (status only) and
+`/actuator/prometheus`; every other route needs a Bearer token.
+
+**Metrics** (profile `monitoring`, `make run-monitoring`, `application-monitoring.yaml`): `health` and `prometheus` on a
+management port of their own, 9001, listening on loopback (`MANAGEMENT_ADDRESS`). Without the profile only `health` is
+exposed, on the application port. The two paths are whitelisted on every port, so never expose `prometheus` without the
+separate port.
+Custom counters all go through `config/metrics/Metrics` (fixed tag values only, never ids; registered at zero on startup):
+`bidtix.job.item.failures{job}` (an item a job caught and skipped: **a new per-item `catch` in a job must count it**, or the
+failure is invisible, because the run itself succeeds), `bidtix.payment.vnpay.ipn{code}` (every answer to the callback,
+which is always HTTP 200) and `bidtix.api.errors{code}` (counted in `GlobalExceptionHandler`).
+Gauges of work left undone are `config/metrics/BacklogGauge`s, one `*BacklogGauges` class per module in its
+`infrastructure`: a `COUNT` every 30 s kept in memory (`NaN` when it could not be read; `max` across instances).
+`bidtix.payments.refund.{pending,oldest.age.seconds,stuck}`, `bidtix.payments.pending.stale` (30 m),
+`bidtix.payments.webhooks.unprocessed` (5 m), `bidtix.orders.expired.uncancelled` (15 m),
+`bidtix.events.cancelled.uncleaned{module}` (10 m), `bidtix.auctions.overdue` (5 m). All but the refunds waiting and
+their age should be zero, except that abandoned payment pages pile up in `pending.stale`; a callback answered `01` or
+`04` also stays unprocessed for good. No index serves these counts yet.
+
+**Monitoring stack** (a development setup, not a production one):
+`docker compose -f compose.yaml -f compose-app.yaml -f monitoring/compose.observability.yaml up -d --build` runs the app
+in a container (profile `monitoring`, 2 GB, as UID `HOST_UID`, default 1000, so that it can read `keys/private.pem`; run
+`make keys` first), Prometheus (`localhost:9090`) and Grafana (`localhost:3000`, `GRAFANA_ADMIN_USER` and
+`GRAFANA_ADMIN_PASSWORD`, default admin/admin). The app has a file of its own because `spring-boot:run` starts everything in
+`compose.yaml`; an app run on the host (`make run-monitoring`) is not scraped by this stack. Port 9001 is not published: the
+app binds it to its fixed address (10.89.0.10) on the internal network `bidtix-scrape`, which only the app and Prometheus
+join (the host can still reach it). Every published port, PostgreSQL's and Redis's included, listens on 127.0.0.1 only.
+- Dashboard "BidTix Overview" is provisioned from `monitoring/grafana/dashboards/bidtix-overview.json`. The UI cannot save
+  over it: export the JSON and replace the file. The datasource's uid is `prometheus`.
+- Alert rules are in `monitoring/prometheus/alert.rule.yml`, their unit tests in `alert.rule.test.yml` (the command is at
+  the top of that file; CI does not run it). Restart Prometheus after changing a rule. There is no Alertmanager, so nobody
+  is notified.
+- The dashboard and the rules name metrics as strings: **renaming a metric or a tag means changing both**, and nothing fails
+  if you forget. The `job` tag of `bidtix.job.item.failures` arrives as `exported_job`, because Prometheus has its own `job`.
 
 **First-time setup: JWT signing keys** (the app will not start without them; `keys/` is git-ignored)
 ```bash
@@ -159,7 +190,10 @@ Decisions and alternatives: [ADR-0001](docs/ADR/0001-hold-seats-with-a-condition
 [ADR-0003](docs/ADR/0003-take-general-admission-stock-with-a-conditional-update.md) (standing stock). The Redis refusal gate in front of it: [ADR-0004](docs/ADR/0004-refuse-known-sold-out-requests-with-a-redis-flag.md). At most
 `bidtix.booking.max-tickets-per-order` (5) tickets per order, and the zone must belong to the event. Only a PUBLISHED
 event sells (anything else is `EVENT_NOTFOUND`), and only from `sale_starts_at` until before `sale_ends_at`
-(`EVENT_NOT_ON_SALE`). The
+(`EVENT_NOT_ON_SALE`). A user's
+unpaid and paid BOOKING tickets of one event never exceed `events.max_tickets_per_user` (`TICKET_LIMIT_EXCEEDED`; auction
+orders do not count): inside the transaction, before any stock is taken, `reserve` takes a PostgreSQL advisory lock on
+(user id, event id) and then counts. Whatever else creates a booking order must take the same lock first. The
 method runs one transaction with `TransactionTemplate` (the gate check and its flags stay outside it) and returns a
 `BookingTicketSeatsResult` or a `BookingTicketQuantityResult` (both are a `BaseBookingTicketResult`), PENDING_PAYMENT and
 without tickets:
@@ -172,15 +206,16 @@ without tickets:
 
 **Booking gate** (`booking/infrastructure/BookingGateway`, `bidtix.booking.gate-enabled` / `gate-ttl-seconds`): before `reserve`,
 `BookingService.rejectIfKnownUnavailable` asks Redis whether a recent request already learned that this quantity (GA) or these
-seats cannot be had, and refuses without opening a transaction. The flags are written only after the database refused
+seats cannot be had, and refuses without the booking transaction (one read, to find an order the request itself made, see
+**Idempotency**). The flags are written only after the database refused
 (`rememberRejection`), live for a few seconds and can only refuse: a missing flag, an expired one or Redis down lets the request
 through (fail-open), and the conditional `UPDATE` still decides. Measured effect: `docs/benchmarks.md`, section "Booking gate on
 the real flow". **Whatever returns stock (the hold-expiry sweeper, giving GA quantity back, a cancel) must clear the matching
 flags after its database commit**, or customers are refused for up to the TTL.
 
-**Grace period** (`payment/service/ConfirmationGrace`, `bidtix.payment.confirmation-grace`, 10 m): an expired order with a
+**Grace period** (`payment/service/ConfirmationGrace`, `bidtix.payment.confirmation-grace`, 15 m): an expired order with a
 `PENDING` payment is released only after the grace period, by both expiry jobs, because the provider's callback may still be
-on its way. The customer gets no extra time to pay. Whatever else releases the stock of an unpaid order must ask it too.
+on its way, or the query about the payment may still find it paid. The customer gets no extra time to pay. Whatever else releases the stock of an unpaid order must ask it too.
 
 **Unpaid orders** (`booking/infrastructure/OrderCancellationJob`, every minute after the last run ended): batches of 100 expired
 `PENDING_PAYMENT` **booking** order ids are read, and each batch is one transaction: lock the orders with `FOR UPDATE SKIP LOCKED`,
@@ -205,18 +240,30 @@ A mark is set only when the job has nothing left for the event (orders: also onl
 `cancelled_at` is over 5 minutes old; a marked event is never looked at again. Anything else that can create work for a
 cancelled event must finish within that window or check the event's status.
 
-**Payment flow** (`payment` module; decisions: [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)).
+**Payment flow** (`payment` module; decisions: [ADR-0005](docs/ADR/0005-confirm-vnpay-payments-in-the-ipn-callback.md)
+and [ADR-0006](docs/ADR/0006-ask-vnpay-about-payments-left-pending.md)).
 The module sees orders only through `PayableOrders`, which `booking` implements (`OrderPayment`).
 1. `POST /api/v1/orders/{orderCode}/payments` (CUSTOMER): `PaymentService.createUrlPayment` commits a `PENDING` payment with
    a new `txn_ref` and returns the signed VNPAY URL, which closes no later than the order's deadline. `requested_at` keeps the
    exact `vnp_CreateDate` sent (VNPAY's query and refund APIs ask for it).
 2. `GET /api/v1/payments/vnpay/ipn` (public, signed, rate limit `vnpay-ipn`; `VnpayCallbackController`):
    `processVnPayResponse` checks the signature (`97`), stores the callback in `payment_webhook_events` (own transaction),
-   then in one transaction finds the payment (`01`), compares the amount (`04`), requires `PENDING` (`02`) and records the
-   result (`00`): `FAILED`, or `applyPayment` (order `PAID`, seats `HELD -> SOLD`, tickets issued, auction offer accepted and
+   then in one transaction finds the payment (`01`), compares the amount (`04`), requires `PENDING`, or a success for a
+   `FAILED` or `CANCELLED` payment (`stillTakes`; otherwise `02`), and records the result (`00`): `FAILED`, or `applyPayment` (order `PAID`, seats `HELD -> SOLD`, tickets issued, auction offer accepted and
    auction settled) with `SUCCEEDED`, or `REFUND_PENDING` when the order cannot take the money. Anything unexpected: `99`.
    VNPAY retries unless it gets `00` or `02`. The answer is `TransactionResponse` (`RspCode`, `Message`), never a
    `ProblemDetail` once the request reaches the service.
+
+Payments left `PENDING` (`payment/infrastructure/PaymentPendingCancelJob`, `bidtix.payment.status-query-cron`, every
+minute; `-` turns it off, which `PostgresIntegrationTest` and the load test stacks do): querydr is asked 3, 10, 17 and 24
+minutes after the payment was made, then after 1 and 24 hours (`status_queries`, `next_status_query_at`; 6 at most). The
+first four times are tied to `expire-minutes` and the grace period: two must fall between the page closing and the stock
+being released. A payment is taken one at a time (`FOR UPDATE SKIP LOCKED`, `markStatusQueried`, which leaves `version`
+alone so that a callback at work does not lose) and committed before the call; a run takes 20 at most and stops at the
+first call without any answer, because the scheduled jobs share one thread. Only a signed answer with response code `00`,
+type `01` and transaction status `00` (and our amount; `PaymentService.confirmQueriedPayment`: tickets, or
+`REFUND_PENDING`) or `02` (`FAILED`) changes anything, and at the last query an answer showing no payment (status `01`, or
+response code `91`, signed or not) makes the payment `CANCELLED`.
 
 Refunds (`payment/infrastructure/RefundPaymentJob`, `bidtix.payment.refund-cron`, every minute in `application.yaml`; `-` turns it off, which
 `PostgresIntegrationTest` does): batches of `REFUND_PENDING` payments are locked (`SKIP LOCKED`) and claimed with
@@ -232,9 +279,9 @@ VNPAY's documentation that no real answer has confirmed yet (the sandbox answers
 never gives the refund claim back.
 
 Rules for changing it: the payment's conditional `UPDATE` (row count checked) is the guard against processing twice, never
-the stored event; no refund or other VNPAY call inside the request's transaction; only the IPN confirms a payment, never the
-return URL. Open points: refunds not yet verified on the sandbox, nothing scans events with `processed_at IS NULL` or asks VNPAY
-about payments left `PENDING`.
+the stored event; no refund or other VNPAY call inside the request's transaction; only what VNPAY says server to server
+(the IPN or querydr) confirms a payment, never the return URL. Open points: refunds and payment queries not yet verified on
+the sandbox, nothing scans events with `processed_at IS NULL`, and a payment whose last query got no usable answer stays `PENDING`.
 
 ## Architecture
 
@@ -343,9 +390,19 @@ JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `
   `/api/v1/orders/*/payments`). It claims the key with `INSERT ... ON CONFLICT DO NOTHING` (committed before the request runs), runs the
   request and stores the response **only for a 2xx**; a failure deletes the key so a retry runs again. Missing or too long header:
   400; same key, other body: 422 `IDEMPOTENCY_KEY_REUSED`; duplicate still running: 409 `IDEMPOTENCY_REQUEST_IN_PROGRESS`; a replay
-  carries `Idempotent-Replayed: true`. A key stuck `PROCESSING` for `processing-timeout` is taken as abandoned. The claim and the
+  carries `Idempotent-Replayed: true`. A key stuck `PROCESSING` for `processing-timeout` is taken as abandoned. Each claim
+  and takeover stores a new `claim_token`, and only the run holding it can complete or release the key, so a slow earlier
+  run cannot touch the later one's row (both may still run at once). The claim and the
   stored response are NOT in the business transaction, so a crash between the business commit and storing the response lets the
   same request run once more after the timeout: a flow whose repeat is harmful needs its own guard in the business transaction.
+- Booking has that guard: the order keeps the key (`orders.idempotency_key`, unique per user, null for auction orders).
+  `BookingService.bookTicket` looks for the request's own order (`findExisting`) only when it is about to refuse (the gate, a
+  `BusinessException`, the unique index), so a successful booking pays nothing for it; the same request gets that order in its
+  state now, another request with the key gets `IDEMPOTENCY_KEY_REUSED` (compared by event, zone and seats or quantity:
+  **a new field of `BookingTicketRequest` must be added to `requireSameRequest`**). The key never expires there. Gate
+  refusals are not remembered again, or the flag would never expire. Bids and payment requests have no such guard.
+- Expired keys are deleted by `IdempotencyCleanupJob` (`bidtix.idempotency.cleanup-cron`, every minute; `-` turns it off,
+  which `PostgresIntegrationTest` does): batches of 1000 with `FOR UPDATE SKIP LOCKED`, 100 batches a run at most.
 
 **Caching**
 - Cache-aside with explicit TTLs; evict on write. Cached availability is a hint for reads only; every

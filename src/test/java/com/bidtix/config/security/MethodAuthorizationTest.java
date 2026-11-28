@@ -1,5 +1,7 @@
 package com.bidtix.config.security;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.booking.service.CheckInService;
 import com.bidtix.booking.controller.CheckInController;
 import com.bidtix.auction.controller.AuctionController;
@@ -361,22 +363,25 @@ class MethodAuthorizationTest {
     void bookTicket_customer_isAllowed_andServiceGetsTheRequestAndTokenSubject() throws Exception {
         UUID eventId = UUID.randomUUID();
         UUID zoneId = UUID.randomUUID();
-        when(bookingService.bookTicket(any(), eq(USER_ID))).thenReturn(new BookingTicketQuantityResult(
+        when(bookingService.bookTicket(any(), eq(USER_ID), any())).thenReturn(new BookingTicketQuantityResult(
                 "ORD-1", OrderStatus.PAID, 600_000L, "VND", Instant.now(), Instant.now(), "Buyer", "Concert", "Hanoi",
                 Instant.now(), Instant.now(), ZoneType.GENERAL_ADMISSION, 2, List.of()));
 
-        mvc.perform(json(post("/api/v1/orders"), "CUSTOMER", ORDER_BODY.formatted(eventId, zoneId)))
+        mvc.perform(json(post("/api/v1/orders"), "CUSTOMER", ORDER_BODY.formatted(eventId, zoneId))
+                        .header("Idempotency-Key", "key-1"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.orderCode").value("ORD-1"))
                 .andExpect(jsonPath("$.status").value("PAID"));
 
-        verify(bookingService).bookTicket(new BookingTicketRequest(eventId, zoneId, null, 2), USER_ID);
+        verify(bookingService).bookTicket(new BookingTicketRequest(eventId, zoneId, null, 2), USER_ID, "key-1");
     }
 
     @Test
     void bookTicket_adminAndOrganizer_areForbidden() throws Exception {
         for (String role : List.of("ADMIN", "ORGANIZER")) {
-            mvc.perform(json(post("/api/v1/orders"), role, ORDER_BODY.formatted(UUID.randomUUID(), UUID.randomUUID())))
+            // a complete request, key included: one without it is refused as malformed before the role is looked at
+            mvc.perform(json(post("/api/v1/orders"), role, ORDER_BODY.formatted(UUID.randomUUID(), UUID.randomUUID()))
+                            .header("Idempotency-Key", "key-1"))
                     .andExpect(forbidden());
         }
     }
@@ -542,6 +547,7 @@ class MethodAuthorizationTest {
             CheckInController.class})
     static class TestConfig {
         @Bean JwtDecoder jwtDecoder() { return mock(JwtDecoder.class); }
+        @Bean Metrics metrics() { return new Metrics(new SimpleMeterRegistry()); }
         @Bean VenueService venueService() { return mock(VenueService.class); }
         @Bean EventService eventService() { return mock(EventService.class); }
         @Bean ZoneService zoneService() { return mock(ZoneService.class); }

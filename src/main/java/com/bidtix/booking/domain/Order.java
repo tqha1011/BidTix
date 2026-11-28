@@ -62,6 +62,10 @@ public class Order extends AuditableEntity {
     @Column(name = "paid_at")
     private Instant paidAt;
 
+    /** The client's Idempotency-Key of the request that made a booking order; null for an auction order. */
+    @Column(name = "idempotency_key", updatable = false, length = 64)
+    private String idempotencyKey;
+
     @Version
     @Column(name = "version", nullable = false)
     private long version;
@@ -69,12 +73,13 @@ public class Order extends AuditableEntity {
     @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true)
     private List<OrderItem> items = new ArrayList<>();
 
-    public Order(Long userId, Long eventId,String orderCode ,OrderSource source, Instant expiresAt) {
+    public Order(Long userId, Long eventId,String orderCode ,OrderSource source, Instant expiresAt, String idempotencyKey) {
         this.userId = userId;
         this.eventId = eventId;
         this.source = source;
         this.orderCode = orderCode;
         this.expiresAt = expiresAt;
+        this.idempotencyKey = idempotencyKey;
     }
 
     public OrderItem addItem(Long zoneId, Long seatId, int quantity, long unitPrice) {

@@ -79,5 +79,8 @@ FROM generate_series(0, :hot_seats - 1) AS i
          JOIN ticket_zones z ON z.public_id = ('00000000-0000-4000-a001-' || lpad((i / 1000)::text, 12, '0'))::uuid
 ORDER BY i;
 
+-- the simulated customers book again and again: keep the per-user ticket limit out of what is measured
+UPDATE events SET max_tickets_per_user = 1000000;
+
 COMMIT;
 ANALYZE;

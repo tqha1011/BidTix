@@ -74,4 +74,8 @@ public interface EventRepository extends JpaRepository<Event, Long> {
             "where e.id in :ids and e.status = com.bidtix.event.domain.EventStatus.CANCELLED " +
             "and e.auctionsCleanedAt is null")
     int markAuctionsCleaned(@Param("ids") List<Long> ids, @Param("now") Instant now);
+
+    long countByStatusAndOrdersCleanedAtIsNullAndCancelledAtBefore(EventStatus status, Instant cancelledBefore);
+
+    long countByStatusAndAuctionsCleanedAtIsNullAndCancelledAtBefore(EventStatus status, Instant cancelledBefore);
 }

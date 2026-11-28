@@ -1,5 +1,7 @@
 package com.bidtix.booking.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import static com.bidtix.support.Counters.jobFailures;
 import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.infrastructure.BookingGateway;
 import com.bidtix.booking.infrastructure.OrderCancellationJob;
@@ -31,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class OrderCancellationJobTest extends PostgresIntegrationTest {
 
     @Autowired OrderCancellationJob job;
+    @Autowired MeterRegistry meters;
     @Autowired BookingService bookingService;
     @Autowired BookingGateway gateway;
     @Autowired EntityManager em;
@@ -70,7 +73,7 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
         }
     }
 
-    // ---- an order whose payment may still be confirmed (bidtix.payment.confirmation-grace: 10m) --------
+    // ---- an order whose payment may still be confirmed (bidtix.payment.confirmation-grace: 15m) --------
 
     @Test
     void anExpiredOrderWithAPendingPayment_keepsItsStockDuringTheGracePeriod() {
@@ -89,11 +92,23 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
     }
 
     @Test
+    void anOrderWithAPendingPayment_isStillKeptJustBeforeTheGracePeriodEnds() {
+        Fixture f = fixture(10, 1);
+        String code = bookQuantity(f, f.userIds().get(0), 3);
+        payment(code, "PENDING");
+        jdbc.update("update orders set expires_at = now() - interval '14 minutes' where order_code = ?", code);
+
+        job.cancelExpiredOrders();
+
+        assertThat(statusOf(code)).isEqualTo("PENDING_PAYMENT");
+    }
+
+    @Test
     void anOrderWithAPendingPayment_isCancelledOnceTheGracePeriodIsOver() {
         Fixture f = fixture(10, 1);
         String code = bookQuantity(f, f.userIds().get(0), 3);
         payment(code, "PENDING");
-        jdbc.update("update orders set expires_at = now() - interval '11 minutes' where order_code = ?", code);
+        jdbc.update("update orders set expires_at = now() - interval '16 minutes' where order_code = ?", code);
 
         job.cancelExpiredOrders();
 
@@ -161,7 +176,11 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
         String broken = insertExpiredOrder(f, "BOOKING", seatedZone, 1);
         String last = insertExpiredOrder(f, "BOOKING", f.zoneDbId(), 1);
 
+        double failuresBefore = jobFailures(meters, "order_cancellation");
+
         job.cancelExpiredOrders();
+
+        assertThat(jobFailures(meters, "order_cancellation")).as("the failed item is counted").isGreaterThan(failuresBefore);
 
         assertThat(statusOf(first)).isEqualTo("CANCELLED");
         assertThat(statusOf(last)).isEqualTo("CANCELLED");
@@ -243,12 +262,12 @@ class OrderCancellationJobTest extends PostgresIntegrationTest {
 
     private String bookQuantity(Fixture f, UUID user, int quantity) {
         return bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user).orderCode();
+                new BookingTicketRequest(f.eventId(), f.zoneId(), null, quantity), user, UUID.randomUUID().toString()).orderCode();
     }
 
     private String bookSeats(Fixture f, UUID user, UUID... seats) {
         return bookingService.bookTicket(
-                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seats), null), user).orderCode();
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seats), null), user, UUID.randomUUID().toString()).orderCode();
     }
 
     /** An unpaid order past its deadline with one standing item, inserted by SQL; the zone counter is lowered like a real hold would. */
