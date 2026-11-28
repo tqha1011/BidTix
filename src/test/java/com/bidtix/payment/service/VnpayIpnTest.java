@@ -13,6 +13,8 @@ import com.bidtix.payment.infrastructure.VnpaySigner;
 import com.bidtix.support.PostgresIntegrationTest;
 import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
@@ -298,6 +300,112 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         assertThat(payment(attempt)).containsEntry("status", "SUCCEEDED");
         assertThat(orderStatus(attempt)).isEqualTo("PAID");
         assertThat(tickets(attempt)).isEqualTo(1);
+    }
+
+    // ---- a success that arrives after we gave up on the payment ----------------------------------
+
+    @ParameterizedTest
+    @ValueSource(strings = {"FAILED", "CANCELLED"})
+    void aLateSuccess_forAnOrderStillWaiting_issuesTheTickets(String givenUpAs) {
+        Attempt attempt = standingAttempt(2);
+        giveUp(attempt, givenUpAs);
+
+        assertThat(send(paid(attempt)).RspCode()).isEqualTo("00");
+
+        assertThat(payment(attempt)).containsEntry("status", "SUCCEEDED").containsEntry("provider_txn_id", numberOf(attempt))
+                .containsEntry("failure_reason", null);
+        assertThat(orderStatus(attempt)).isEqualTo("PAID");
+        assertThat(tickets(attempt)).isEqualTo(2);
+        assertProcessed(attempt.txnRef());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"FAILED", "CANCELLED"})
+    void aLateSuccess_forACancelledOrder_isMarkedForRefund(String givenUpAs) {
+        Attempt attempt = standingAttempt(1);
+        giveUp(attempt, givenUpAs);
+        jdbc.update("update orders set expires_at = now() - interval '1 minute' where order_code = ?", attempt.orderCode());
+        cancellationJob.cancelExpiredOrders();
+
+        assertThat(send(paid(attempt)).RspCode()).isEqualTo("00");
+
+        assertThat(payment(attempt)).containsEntry("status", "REFUND_PENDING")
+                .containsEntry("provider_txn_id", numberOf(attempt));
+        assertThat(orderStatus(attempt)).isEqualTo("CANCELLED");
+        assertThat(tickets(attempt)).isZero();
+        assertProcessed(attempt.txnRef());
+    }
+
+    @Test
+    void aLateSuccess_forAnOrderPaidByAnotherAttempt_isMarkedForRefund() {
+        Attempt first = standingAttempt(1);
+        Attempt second = anotherAttempt(first);
+        giveUp(first, "CANCELLED");
+        send(paid(second));
+
+        assertThat(send(paid(first)).RspCode()).isEqualTo("00");
+
+        assertThat(payment(first)).containsEntry("status", "REFUND_PENDING");
+        assertThat(payment(second)).containsEntry("status", "SUCCEEDED");
+        assertThat(tickets(first)).isEqualTo(1);
+    }
+
+    @Test
+    void aLateSuccess_whoseSeatHoldWasLost_isMarkedForRefund() {
+        Fixture f = fixture();
+        UUID seat = f.seatedSeatIds().get(0);
+        UUID user = f.userIds().get(0);
+        String code = bookingService.bookTicket(
+                new BookingTicketRequest(f.eventId(), f.seatedZoneId(), List.of(seat), null), user).orderCode();
+        Attempt attempt = attempt(user, code);
+        giveUp(attempt, "FAILED");
+        jdbc.update("update seats set status = 'AVAILABLE', held_by_order_id = null, hold_expires_at = null "
+                + "where public_id = ?", seat);
+
+        assertThat(send(paid(attempt)).RspCode()).isEqualTo("00");
+
+        assertThat(payment(attempt)).containsEntry("status", "REFUND_PENDING")
+                .containsEntry("provider_txn_id", numberOf(attempt));
+        assertThat(tickets(attempt)).isZero();
+        assertProcessed(attempt.txnRef());
+    }
+
+    @Test
+    void aLateFailure_changesNothing() {
+        Attempt attempt = standingAttempt(1);
+        giveUp(attempt, "CANCELLED");
+        Map<String, String> params = unsigned(attempt, numberOf(attempt));
+        params.put("vnp_ResponseCode", "24");
+        params.put("vnp_TransactionStatus", "02");
+
+        assertThat(send(sign(params)).RspCode()).isEqualTo("02");
+
+        assertThat(payment(attempt)).containsEntry("status", "CANCELLED").containsEntry("failure_reason", "gave up");
+    }
+
+    @Test
+    void theSameLateSuccessInParallel_paysTheOrderOnce() throws Exception {
+        Attempt attempt = standingAttempt(2);
+        giveUp(attempt, "CANCELLED");
+        Map<String, String> params = paid(attempt);
+        List<Callable<TransactionResponse>> calls = new ArrayList<>();
+        for (int i = 0; i < 8; i++) {
+            calls.add(() -> send(params));
+        }
+
+        List<String> codes = runTogether(calls);
+
+        assertThat(codes).containsOnlyOnce("00");
+        assertThat(codes.stream().filter("02"::equals)).hasSize(7);
+        assertThat(payment(attempt)).containsEntry("status", "SUCCEEDED");
+        assertThat(tickets(attempt)).isEqualTo(2);
+        assertProcessed(attempt.txnRef());
+    }
+
+    /** As the query job leaves a payment it saw fail, or found unpaid at its last query. */
+    private void giveUp(Attempt attempt, String status) {
+        jdbc.update("update payments set status = ?, failure_reason = 'gave up', version = version + 1 "
+                + "where txn_ref = ?", status, attempt.txnRef());
     }
 
     @Test

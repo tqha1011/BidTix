@@ -24,16 +24,20 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
             + "and p.status = com.bidtix.payment.domain.PaymentStatus.PENDING")
     Set<Long> findOrderIdsWithPendingPayment(@Param("orderIds") Collection<Long> orderIds);
 
-    /** Moves a PENDING payment to its result. Check the row count: 0 means it was not PENDING at this version any more. */
+    /**
+     * Moves a payment from {@code currentStatus} to {@code newStatus}. Check the row count: 0 means it was not in that
+     * status at this version any more. The caller decides which moves are allowed.
+     */
     @Modifying
     @Query("update Payment p " +
-            "set p.status = :status, p.providerTxnId = :providerTxnId, p.failureReason = :failureReason, " +
+            "set p.status = :newStatus, p.providerTxnId = :providerTxnId, p.failureReason = :failureReason, " +
             "p.updatedAt = :now, p.version = p.version + 1 " +
-            "where p.txnRef = :txnRef and p.status = com.bidtix.payment.domain.PaymentStatus.PENDING " +
+            "where p.txnRef = :txnRef and p.status = :currentStatus " +
             "and p.version = :version")
     int updatePaymentStatusByTxnRef(@Param("txnRef") String txnRef,
                                     @Param("providerTxnId") String providerTxnId,
-                                    @Param("status") PaymentStatus status,
+                                    @Param("newStatus") PaymentStatus newStatus,
+                                    @Param("currentStatus") PaymentStatus currentStatus,
                                     @Param("failureReason") String failureReason,
                                     @Param("version") long version,
                                     @Param("now") Instant now);

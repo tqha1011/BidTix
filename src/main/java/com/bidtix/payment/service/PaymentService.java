@@ -114,7 +114,7 @@ public class PaymentService {
      * <ul>
      * <li>{@code 97}: the signature is wrong. Nothing else is looked at.</li>
      * <li>{@code 01}: no payment has this reference. {@code 04}: the amount is not the payment's amount.</li>
-     * <li>{@code 02}: the payment is not PENDING any more, so an earlier delivery already decided it.</li>
+     * <li>{@code 02}: the payment was already decided. Only a success still changes a FAILED or CANCELLED payment.</li>
      * <li>{@code 00}: recorded now. A failed transaction makes the payment FAILED and leaves the order payable. A
      * successful one pays the order (SUCCEEDED) or, when the order cannot take the money any more, makes the payment
      * REFUND_PENDING. Nothing is refunded here.</li>
@@ -166,7 +166,7 @@ public class PaymentService {
         try {
             transactionTemplate.executeWithoutResult(tx -> pendingPayment(txnRef).ifPresent(payment -> {
                 Outcome outcome = applyToOrder(payment, paidAt(payDate));
-                leavePending(payment, outcome.status(), transactionNo, outcome.failureReason(), tx);
+                changeStatus(payment, outcome.status(), transactionNo, outcome.failureReason(), tx);
             }));
         } catch (BusinessException e) {
             if (e.getErrorCode() != ErrorCode.ORDER_NOT_PAYABLE) {
@@ -174,14 +174,20 @@ public class PaymentService {
             }
             // rolled back as a whole, but VNPAY has the money
             transactionTemplate.executeWithoutResult(tx -> pendingPayment(txnRef).ifPresent(payment ->
-                    leavePending(payment, PaymentStatus.REFUND_PENDING, transactionNo, e.getMessage(), tx)));
+                    changeStatus(payment, PaymentStatus.REFUND_PENDING, transactionNo, e.getMessage(), tx)));
         }
+    }
+
+    /** The last query still found no payment: PENDING to CANCELLED, anything else stays as it is. */
+    public void cancelQueriedPayment(String txnRef, String reason) {
+        transactionTemplate.executeWithoutResult(tx -> pendingPayment(txnRef).ifPresent(payment ->
+                changeStatus(payment, PaymentStatus.CANCELLED, null, reason, tx)));
     }
 
     /** VNPAY's query reports the transaction as failed: PENDING to FAILED, anything else stays as it is. */
     public void failQueriedPayment(String txnRef, String reason) {
         transactionTemplate.executeWithoutResult(tx -> pendingPayment(txnRef).ifPresent(payment ->
-                leavePending(payment, PaymentStatus.FAILED, null, reason, tx)));
+                changeStatus(payment, PaymentStatus.FAILED, null, reason, tx)));
     }
 
     private TransactionResponse confirmOrRefundLater(VnPayResponse response) {
@@ -211,7 +217,7 @@ public class PaymentService {
 
     private static boolean agrees(VnPayResponse response, PaymentStatus recorded) {
         if (!succeeded(response)) {
-            return recorded == PaymentStatus.FAILED;
+            return recorded == PaymentStatus.FAILED || recorded == PaymentStatus.CANCELLED;
         }
         return recorded == PaymentStatus.SUCCEEDED || recorded == PaymentStatus.REFUND_PENDING
                 || recorded == PaymentStatus.REFUNDED;
@@ -268,7 +274,7 @@ public class PaymentService {
                     payment.getAmount());
             return TransactionResponse.create("04", "Invalid amount");
         }
-        if (payment.getStatus() != PaymentStatus.PENDING) {
+        if (!stillTakes(payment, response)) {
             return alreadyConfirmed();
         }
 
@@ -294,6 +300,19 @@ public class PaymentService {
         };
     }
 
+    /**
+     * Whether this callback may still change its payment. A PENDING payment takes any result. A FAILED or CANCELLED one
+     * takes only a success: VNPAY has the money after all, so the order gets it or it is refunded. A payment that
+     * succeeded, or waits for or got its refund, is never changed.
+     */
+    private static boolean stillTakes(Payment payment, VnPayResponse response) {
+        return switch (payment.getStatus()) {
+            case PENDING -> true;
+            case FAILED, CANCELLED -> succeeded(response);
+            case SUCCEEDED, REFUND_PENDING, REFUNDED -> false;
+        };
+    }
+
     private Optional<Payment> pendingPayment(String txnRef) {
         return paymentRepository.findByProviderAndTxnRef(PaymentProvider.VNPAY, txnRef)
                 .filter(payment -> payment.getStatus() == PaymentStatus.PENDING);
@@ -303,16 +322,16 @@ public class PaymentService {
     private TransactionResponse refundLater(VnPayResponse response, String reason, TransactionStatus tx) {
         Payment payment = paymentRepository.findByProviderAndTxnRef(PaymentProvider.VNPAY, response.txnRef())
                 .orElseThrow();
-        if (payment.getStatus() != PaymentStatus.PENDING) {
+        if (!stillTakes(payment, response)) {
             return alreadyConfirmed();
         }
         return record(payment, response, PaymentStatus.REFUND_PENDING, response.transactionNo(), reason, tx);
     }
 
-    /** {@link #leavePending} for a callback: the stored event is marked processed in the same transaction. */
+    /** {@link #changeStatus} for a callback: the stored event is marked processed in the same transaction. */
     private TransactionResponse record(Payment payment, VnPayResponse response, PaymentStatus status,
                                        String transactionNo, String failureReason, TransactionStatus tx) {
-        if (!leavePending(payment, status, transactionNo, failureReason, tx)) {
+        if (!changeStatus(payment, status, transactionNo, failureReason, tx)) {
             return alreadyConfirmed();
         }
         if (webhookEventRepository.markProcessed(PaymentProvider.VNPAY, eventId(response), clock.instant()) != 1) {
@@ -323,12 +342,12 @@ public class PaymentService {
     }
 
     /**
-     * PENDING -> {@code status} with one conditional UPDATE. False (0 rows) means a callback or a query got there first:
-     * everything this transaction did is rolled back.
+     * From the status the payment was read in to {@code status}, with one conditional UPDATE. False (0 rows) means a
+     * callback or a query changed it first: everything this transaction did is rolled back.
      */
-    private boolean leavePending(Payment payment, PaymentStatus status, String transactionNo, String failureReason,
+    private boolean changeStatus(Payment payment, PaymentStatus status, String transactionNo, String failureReason,
                                  TransactionStatus tx) {
-        int updated = paymentRepository.updatePaymentStatusByTxnRef(payment.getTxnRef(), transactionNo, status,
+        int updated = paymentRepository.updatePaymentStatusByTxnRef(payment.getTxnRef(), transactionNo, status, payment.getStatus(),
                 failureReason, payment.getVersion(), clock.instant());
         if (updated != 1) {
             tx.setRollbackOnly();

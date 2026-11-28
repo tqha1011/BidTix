@@ -46,6 +46,8 @@ public class PaymentPendingCancelJob {
     private static final String VNPAY_NOT_FOUND = "91";
     /** vnp_TransactionType of the record of the payment itself (02 and 03 are refunds). */
     private static final String VNPAY_PAYMENT_RECORD = "01";
+    /** vnp_TransactionStatus: the transaction has not been completed. */
+    private static final String VNPAY_TRANSACTION_INCOMPLETE = "01";
     /** vnp_TransactionStatus: the transaction ended in an error. */
     private static final String VNPAY_TRANSACTION_FAILED = "02";
 
@@ -117,8 +119,9 @@ public class PaymentPendingCancelJob {
     /**
      * What querydr's answer says about the payment. Checked in this order: the signature and the reference,
      * {@code vnp_ResponseCode} (was the query processed), {@code vnp_TransactionType} (is this the payment's record),
-     * and only then {@code vnp_TransactionStatus}. Only 00 (paid, with our amount) and 02 (failed) decide anything;
-     * every other answer leaves the payment PENDING, to be asked about again. These meanings come from VNPAY's
+     * and only then {@code vnp_TransactionStatus}. 00 (paid, with our amount) and 02 (failed) decide at once. "No
+     * payment" (status 01, not completed, or response code 91, no such transaction) cancels the payment only at its last
+     * query, a day after it was made. Every other answer leaves it PENDING. These meanings come from VNPAY's
      * documentation and have not been seen on a real answer.
      */
     private void handleQueryResponse(Map<String,String> response, Payment payment){
@@ -128,8 +131,8 @@ public class PaymentPendingCancelJob {
         }
         String code = Objects.toString(response.get("vnp_ResponseCode"), "");
         if(VNPAY_NOT_FOUND.equals(code)){
-            // expected for abandoned payment pages, so not a failure; nothing changes, signed or not
-            log.info("VNPAY has no transaction for pending payment {}", payment.getTxnRef());
+            // expected for abandoned payment pages, so not a failure. Taken signed or not: error answers come unsigned
+            noPayment(payment, "response code " + code);
             return;
         }
         if(!signer.verifyQueryResponse(response)){
@@ -156,10 +159,24 @@ public class PaymentPendingCancelJob {
             case VNPAY_SUCCESS -> confirm(response, payment);
             case VNPAY_TRANSACTION_FAILED -> paymentService.failQueriedPayment(payment.getTxnRef(),
                     "VNPAY query: transaction status " + status);
-            // 01 not completed, 04 debited at the bank but not successful, 07 suspected fraud, or unknown
+            case VNPAY_TRANSACTION_INCOMPLETE -> noPayment(payment, "transaction status " + status);
+            // 04 debited at the bank but not successful, 07 suspected fraud, or unknown: money may have moved
             default -> log.warn("Pending payment {} stays undecided: transaction status '{}'", payment.getTxnRef(),
                     status);
         }
+    }
+
+    /**
+     * VNPAY shows no payment. While queries remain that is not final, the customer may still be paying; at the last one
+     * the payment is cancelled.
+     */
+    private void noPayment(Payment payment, String answer){
+        // the entity was read before this query was counted
+        if(payment.getStatusQueries() + 1 < MAX_STATUS_QUERIES){
+            log.info("No payment yet for pending payment {}: {}", payment.getTxnRef(), answer);
+            return;
+        }
+        paymentService.cancelQueriedPayment(payment.getTxnRef(), "No payment after the last query: " + answer);
     }
 
     /** VNPAY has the money: the order takes it, or it is marked for a refund. Never for another amount than ours. */

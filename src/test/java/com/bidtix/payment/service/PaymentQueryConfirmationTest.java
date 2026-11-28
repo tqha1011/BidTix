@@ -118,13 +118,26 @@ class PaymentQueryConfirmationTest extends PostgresIntegrationTest {
     }
 
     @Test
-    void aCallbackThatContradictsTheQuery_staysUnprocessed_forAPersonToSee() {
+    void aFailedCallbackForAPaymentFoundPaid_staysUnprocessed_forAPersonToSee() {
         Attempt attempt = standingAttempt(1);
-        service.failQueriedPayment(attempt.txnRef(), "VNPAY query: transaction status 02");
+        service.confirmQueriedPayment(attempt.txnRef(), numberOf(attempt), PAY_DATE);
 
-        send(callback(attempt));   // says paid
+        send(callback(attempt, "24"));   // says failed
 
+        assertPaidOnce(attempt, 1);
         assertThat(unprocessedCallbacks(attempt)).isEqualTo(1);
+    }
+
+    @Test
+    void aFailedCallbackForACancelledPayment_agreesWithIt() {
+        Attempt attempt = standingAttempt(1);
+        service.cancelQueriedPayment(attempt.txnRef(), "No payment after the last query");
+
+        send(callback(attempt, "24"));   // the customer cancelled on VNPAY's page
+
+        assertThat(jdbc.queryForObject("select status from payments where txn_ref = ?", String.class, attempt.txnRef()))
+                .isEqualTo("CANCELLED");
+        assertThat(unprocessedCallbacks(attempt)).isZero();
     }
 
     // ---- helpers ---------------------------------------------------------------------------------
@@ -159,9 +172,14 @@ class PaymentQueryConfirmationTest extends PostgresIntegrationTest {
     }
 
     private Map<String, String> callback(Attempt attempt) {
+        return callback(attempt, "00");
+    }
+
+    private Map<String, String> callback(Attempt attempt, String code) {
         Map<String, String> params = new HashMap<>(Map.of("vnp_TmnCode", "TESTCODE",
                 "vnp_Amount", String.valueOf(attempt.amount() * 100), "vnp_PayDate", PAY_DATE,
-                "vnp_TransactionNo", numberOf(attempt), "vnp_ResponseCode", "00", "vnp_TransactionStatus", "00",
+                "vnp_TransactionNo", numberOf(attempt), "vnp_ResponseCode", code,
+                "vnp_TransactionStatus", code.equals("00") ? "00" : "02",
                 "vnp_TxnRef", attempt.txnRef()));
         String url = signer.signedPaymentUrl(params);
         params.put("vnp_SecureHash", url.substring(url.indexOf("vnp_SecureHash=") + "vnp_SecureHash=".length()));

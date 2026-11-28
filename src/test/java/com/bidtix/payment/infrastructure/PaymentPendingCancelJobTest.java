@@ -218,6 +218,45 @@ class PaymentPendingCancelJobTest extends PostgresIntegrationTest {
                 .containsEntry("status_queries", 1);
     }
 
+    @ParameterizedTest
+    @ValueSource(strings = {
+            "status:01",      // not completed, a day after the payment was made
+            "code:91",        // no such transaction
+            "unsigned-91"})   // the same without a signature, as VNPAY's error answers come
+    void afterTheLastQuery_aPaymentNobodyPaid_isCancelled(String answer) {
+        String txnRef = dueForItsLastQuery();
+        ANSWERS.put(txnRef, answer);
+
+        job.cancelPendingPayments();
+
+        assertThat(row(txnRef)).containsEntry("status", "CANCELLED").containsEntry("provider_txn_id", null)
+                .containsEntry("status_queries", PaymentPendingCancelJob.MAX_STATUS_QUERIES);
+        assertThat((String) row(txnRef).get("failure_reason")).startsWith("No payment after the last query");
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"status:04", "status:07", "unsigned-99", "bad-signature", "other-reference",
+            "refund-record", "500", "hang-up"})
+    void afterTheLastQuery_aPaymentWithoutAClearAnswer_staysPending(String answer) {
+        String txnRef = dueForItsLastQuery();
+        ANSWERS.put(txnRef, answer);
+
+        job.cancelPendingPayments();
+
+        assertThat(requestsFor(txnRef)).hasSize(1);
+        assertThat(row(txnRef)).containsEntry("status", "PENDING");
+    }
+
+    @Test
+    void aPaymentFoundPaidAtTheLastQuery_isNotCancelled() {
+        String txnRef = dueForItsLastQuery();
+        ANSWERS.put(txnRef, "status:00");
+
+        job.cancelPendingPayments();
+
+        assertThat(row(txnRef)).containsEntry("status", "REFUND_PENDING");
+    }
+
     @Test
     void aPaymentIsNotAskedAboutAgainBeforeItsNextTime() {
         String txnRef = pendingOnCancelledOrder();
@@ -274,7 +313,8 @@ class PaymentPendingCancelJobTest extends PostgresIntegrationTest {
 
         transactionTemplate.executeWithoutResult(tx -> payments.markStatusQueried(id, now.plusSeconds(60), now));
         int updated = transactionTemplate.execute(tx -> payments.updatePaymentStatusByTxnRef(txnRef, null,
-                com.bidtix.payment.domain.PaymentStatus.FAILED, "callback", versionTheCallbackRead, now));
+                com.bidtix.payment.domain.PaymentStatus.FAILED, com.bidtix.payment.domain.PaymentStatus.PENDING,
+                "callback", versionTheCallbackRead, now));
 
         assertThat(updated).isEqualTo(1);
     }
@@ -291,6 +331,14 @@ class PaymentPendingCancelJobTest extends PostgresIntegrationTest {
         String txnRef = RefundFixtures.refundPending(jdbc);
         jdbc.update("update payments set status = 'PENDING', failure_reason = null, "
                 + "requested_at = now() - make_interval(mins => ?) where txn_ref = ?", minutesAgo, txnRef);
+        return txnRef;
+    }
+
+    /** A payment made yesterday that has had every query but one. */
+    private String dueForItsLastQuery() {
+        String txnRef = pending(25 * 60);
+        jdbc.update("update payments set status_queries = ? where txn_ref = ?",
+                PaymentPendingCancelJob.MAX_STATUS_QUERIES - 1, txnRef);
         return txnRef;
     }
 
@@ -331,6 +379,9 @@ class PaymentPendingCancelJobTest extends PostgresIntegrationTest {
     }
 
     private static Map<String, String> answer(String mode, String txnRef) {
+        if (mode.equals("unsigned-91")) {
+            return Map.of("vnp_ResponseCode", "91", "vnp_Message", "Not found");
+        }
         if (mode.equals("unsigned-99") || mode.equals("500")) {
             return Map.of("vnp_ResponseCode", "99", "vnp_Message", "Unexpected error");
         }
