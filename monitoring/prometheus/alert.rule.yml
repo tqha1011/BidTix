@@ -1,0 +1,49 @@
+# Alert rules, shown on Prometheus's /alerts page. There is no Alertmanager yet, so nobody is notified.
+groups:
+  - name: bidtix-availability
+    rules:
+      - alert: ApplicationDown
+        expr: up{job="bidtix-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The application cannot be scraped"
+          description: "Prometheus has not been able to scrape {{ $labels.instance }} for 1 minute."
+
+      # The second condition keeps a single failure on an idle system (a ratio of 100%) from alerting.
+      - alert: HighServerErrorRatio
+        expr: |
+          (
+              sum(rate(http_server_requests_seconds_count{job="bidtix-backend",status=~"5.."}[5m]))
+            /
+              sum(rate(http_server_requests_seconds_count{job="bidtix-backend"}[5m]))
+          ) > 0.05
+          and sum(rate(http_server_requests_seconds_count{job="bidtix-backend"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Many requests end in a server error"
+          description: "{{ $value | humanizePercentage }} of requests were answered with a 5xx over the last 5 minutes."
+
+  - name: bidtix-background-work
+    rules:
+      # No "for": one skipped item is worth seeing. The job's own label arrives as exported_job (see the dashboard).
+      - alert: JobItemFailures
+        expr: sum by (exported_job) (increase(bidtix_job_item_failures_total{job="bidtix-backend"}[15m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "A background job skipped an item"
+          description: "Job {{ $labels.exported_job }} failed on at least one item in the last 15 minutes: see the application log."
+
+      # max: every instance counts the same database rows. A count that could not be read is NaN and does not fire.
+      - alert: RefundStuck
+        expr: max(bidtix_payments_refund_stuck{job="bidtix-backend"}) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "A refund needs a person"
+          description: "{{ $value }} refund(s) will not be finished by the job."

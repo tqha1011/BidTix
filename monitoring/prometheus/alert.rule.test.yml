@@ -1,0 +1,117 @@
+# Unit tests for alert.rule.yml. Run from the repository root:
+#   docker run --rm -v "$PWD/monitoring/prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:latest \
+#     test rules /etc/prometheus/alert.rule.test.yml
+rule_files:
+  - alert.rule.yml
+
+evaluation_interval: 15s
+
+tests:
+  - name: nothing wrong, nothing fires
+    interval: 15s
+    input_series:
+      - series: 'up{job="bidtix-backend",instance="app:9001"}'
+        values: '1x80'
+      - series: 'http_server_requests_seconds_count{job="bidtix-backend",status="200"}'
+        values: '0+90x80'
+      - series: 'bidtix_job_item_failures_total{job="bidtix-backend",exported_job="refund"}'
+        values: '0x80'
+      - series: 'bidtix_payments_refund_stuck{job="bidtix-backend",instance="app:9001"}'
+        values: '0x80'
+    promql_expr_test:
+      - expr: ALERTS
+        eval_time: 15m
+        exp_samples: []
+
+  - name: application down fires after a minute, not at once
+    interval: 15s
+    input_series:
+      - series: 'up{job="bidtix-backend",instance="app:9001"}'
+        values: '1x4 0x20'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 1m45s
+        exp_samples: []
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="ApplicationDown",alertstate="firing",severity="critical",job="bidtix-backend",instance="app:9001"}'
+            value: 1
+
+  - name: 10 percent server errors fires after five minutes
+    interval: 15s
+    input_series:
+      - series: 'http_server_requests_seconds_count{job="bidtix-backend",status="200"}'
+        values: '0+90x60'
+      - series: 'http_server_requests_seconds_count{job="bidtix-backend",status="500"}'
+        values: '0+10x60'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 4m
+        exp_samples: []
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 12m
+        exp_samples:
+          - labels: 'ALERTS{alertname="HighServerErrorRatio",alertstate="firing",severity="critical"}'
+            value: 1
+
+  - name: 1 percent server errors stays quiet
+    interval: 15s
+    input_series:
+      - series: 'http_server_requests_seconds_count{job="bidtix-backend",status="200"}'
+        values: '0+99x60'
+      - series: 'http_server_requests_seconds_count{job="bidtix-backend",status="500"}'
+        values: '0+1x60'
+    promql_expr_test:
+      - expr: ALERTS
+        eval_time: 12m
+        exp_samples: []
+
+  - name: errors with almost no traffic stay quiet
+    interval: 15s
+    input_series:
+      # one failed request every 15 s is 100 percent, but below 0.1 requests per second
+      - series: 'http_server_requests_seconds_count{job="bidtix-backend",status="500"}'
+        values: '0+1x60'
+    promql_expr_test:
+      - expr: ALERTS
+        eval_time: 12m
+        exp_samples: []
+
+  - name: one failed job item fires, then clears
+    interval: 15s
+    input_series:
+      - series: 'bidtix_job_item_failures_total{job="bidtix-backend",exported_job="refund"}'
+        values: '0x7 1x100'
+      - series: 'bidtix_job_item_failures_total{job="bidtix-backend",exported_job="offer_expiry"}'
+        values: '0x107'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="JobItemFailures",alertstate="firing",severity="warning",exported_job="refund"}'
+            value: 1
+      - expr: ALERTS
+        eval_time: 25m
+        exp_samples: []
+
+  - name: a stuck refund fires, an unreadable count does not
+    interval: 15s
+    input_series:
+      - series: 'bidtix_payments_refund_stuck{job="bidtix-backend",instance="app:9001"}'
+        values: '0x3 2x20'
+    promql_expr_test:
+      - expr: ALERTS{alertstate="firing"}
+        eval_time: 3m
+        exp_samples:
+          - labels: 'ALERTS{alertname="RefundStuck",alertstate="firing",severity="critical"}'
+            value: 1
+  - name: an unreadable count does not fire
+    interval: 15s
+    input_series:
+      - series: 'bidtix_payments_refund_stuck{job="bidtix-backend",instance="app:9001"}'
+        values: 'NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN NaN'
+    promql_expr_test:
+      - expr: ALERTS
+        eval_time: 3m
+        exp_samples: []

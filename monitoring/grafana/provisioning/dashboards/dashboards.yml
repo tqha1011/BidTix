@@ -1,0 +1,12 @@
+apiVersion: 1
+
+providers:
+  # Dashboards come from the JSON files in monitoring/grafana/dashboards. The UI cannot save over them: export the
+  # JSON there and replace the file.
+  - name: bidtix
+    folder: BidTix
+    type: file
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana-dashboards
