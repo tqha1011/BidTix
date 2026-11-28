@@ -390,7 +390,9 @@ JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `
   `/api/v1/orders/*/payments`). It claims the key with `INSERT ... ON CONFLICT DO NOTHING` (committed before the request runs), runs the
   request and stores the response **only for a 2xx**; a failure deletes the key so a retry runs again. Missing or too long header:
   400; same key, other body: 422 `IDEMPOTENCY_KEY_REUSED`; duplicate still running: 409 `IDEMPOTENCY_REQUEST_IN_PROGRESS`; a replay
-  carries `Idempotent-Replayed: true`. A key stuck `PROCESSING` for `processing-timeout` is taken as abandoned. The claim and the
+  carries `Idempotent-Replayed: true`. A key stuck `PROCESSING` for `processing-timeout` is taken as abandoned. Each claim
+  and takeover stores a new `claim_token`, and only the run holding it can complete or release the key, so a slow earlier
+  run cannot touch the later one's row (both may still run at once). The claim and the
   stored response are NOT in the business transaction, so a crash between the business commit and storing the response lets the
   same request run once more after the timeout: a flow whose repeat is harmful needs its own guard in the business transaction.
 - Booking has that guard: the order keeps the key (`orders.idempotency_key`, unique per user, null for auction orders).

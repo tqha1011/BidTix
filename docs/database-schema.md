@@ -35,6 +35,7 @@ Version numbers are global across modules, so a new migration always takes the n
 | V23 | `payment` | payment status `CANCELLED` (still unpaid at the last query) |
 | V24 | `booking` | `orders.idempotency_key`, partial unique `ux_orders_user_idempotency_key` (one order per user and key) |
 | V25 | `common` | `idx_idempotency_keys_expires_at` (deleting expired keys) |
+| V26 | `common` | `idempotency_keys.claim_token` (which run of a request holds the key) |
 
 ## Conventions
 
@@ -141,7 +142,9 @@ users ──< idempotency_keys
 
   `IdempotencyFilter` (`common/idempotency`, runs after Spring Security) does this for the routes in
   `bidtix.idempotency.paths`. The key is claimed with `INSERT ... ON CONFLICT DO NOTHING` before the request runs, and
-  the response is stored after it, only for a 2xx; any other outcome deletes the key so a retry runs again. These are
+  the response is stored after it, only for a 2xx; any other outcome deletes the key so a retry runs again. Each claim and
+  takeover writes a new `claim_token`, and storing or deleting requires it, so an earlier run cannot touch a later one's
+  row. These are
   separate transactions from the business change: if the server dies between the business commit and storing the
   response, the key stays `PROCESSING` and, after `processing-timeout`, the same request runs once more. A flow whose
   repeat is harmful needs its own guard in the business transaction (for a bid: `UNIQUE (auction_id, amount)` and the
