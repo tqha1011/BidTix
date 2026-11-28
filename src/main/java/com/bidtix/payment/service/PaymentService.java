@@ -1,5 +1,6 @@
 package com.bidtix.payment.service;
 
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.config.exceptions.BusinessException;
 import com.bidtix.config.exceptions.ErrorCode;
 import com.bidtix.payment.domain.Payment;
@@ -55,6 +56,7 @@ public class PaymentService {
     private final TransactionTemplate transactionTemplate;
     private final PaymentWebhookEventRepository webhookEventRepository;
     private final JsonMapper jsonMapper;
+    private final Metrics metrics;
 
     /**
      * Records a PENDING payment attempt for one of the caller's orders and returns the signed VNPAY page for it. Nothing is
@@ -127,6 +129,12 @@ public class PaymentService {
      * @param response the same parameters, bound
      */
     public TransactionResponse processVnPayResponse(Map<String, String> params, VnPayResponse response) {
+        TransactionResponse answer = handleVnPayResponse(params, response);
+        metrics.vnpayIpnAnswered(answer.RspCode());   // every transaction of the confirmation has ended
+        return answer;
+    }
+
+    private TransactionResponse handleVnPayResponse(Map<String, String> params, VnPayResponse response) {
         if (!signer.verify(params)) {
             return TransactionResponse.create("97", "Invalid signature");
         }

@@ -1,5 +1,6 @@
 package com.bidtix.booking.infrastructure;
 
+import com.bidtix.booking.domain.OrderSource;
 import com.bidtix.booking.domain.Order;
 import com.bidtix.booking.dtos.OrderItemResponse;
 import com.bidtix.booking.dtos.OrderSummaryResponse;
@@ -206,4 +207,6 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
             "where o.userId = :userId and o.eventId = :eventId and o.source = OrderSource.BOOKING " +
             "and o.status in (OrderStatus.PENDING_PAYMENT, OrderStatus.PAID)")
     long countBookedTickets(@Param("userId") long userId, @Param("eventId") long eventId);
+
+    long countByStatusAndSourceAndExpiresAtBefore(OrderStatus status, OrderSource source, Instant expiredBefore);
 }

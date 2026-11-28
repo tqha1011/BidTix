@@ -1,5 +1,7 @@
 package com.bidtix.auction.infrastructure;
 
+import com.bidtix.config.metrics.Metrics.Job;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.domain.Bid;
@@ -45,6 +47,7 @@ public class AuctionClosingJob {
     private final AuctionSettlementService settlement;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
+    private final Metrics metrics;
 
     /** What closing one auction produced; {@code returned} is set only when a ticket went back on sale. */
     private record Closed(@Nullable Returned returned) {
@@ -69,6 +72,7 @@ public class AuctionClosingJob {
                 } catch (RuntimeException e) {
                     // This auction rolled back as a whole, nothing is half done. The others go on; it is retried next run.
                     failed++;
+                    metrics.jobItemFailed(Job.AUCTION_CLOSING);
                     log.error("Could not close auction {}", auctionId, e);
                 }
             }

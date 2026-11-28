@@ -1,5 +1,7 @@
 package com.bidtix.auction.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import static com.bidtix.support.Counters.jobFailures;
 import com.bidtix.auction.dtos.CreateAuctionRequest;
 import com.bidtix.auction.infrastructure.AuctionClosingJob;
 import com.bidtix.auction.infrastructure.CancelledEventAuctionJob;
@@ -37,6 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CancelledEventAuctionJobTest extends PostgresIntegrationTest {
 
     @Autowired CancelledEventAuctionJob job;
+    @Autowired MeterRegistry meters;
     @Autowired AuctionClosingJob closingJob;
     @Autowired AuctionService auctionService;
     @Autowired UserRepository users;
@@ -193,7 +196,11 @@ class CancelledEventAuctionJobTest extends PostgresIntegrationTest {
         jdbc.update("update orders set status = 'CANCELLED' where id = ?", orderId(broken));
         cancelEvent(f, 6);
 
+        double failuresBefore = jobFailures(meters, "cancelled_event_auctions");
+
         job.cancelAuctionsOfCancelledEvents();
+
+        assertThat(jobFailures(meters, "cancelled_event_auctions")).as("the failed item is counted").isGreaterThan(failuresBefore);
 
         assertThat(statusOf(good)).isEqualTo("CANCELLED");
         assertThat(statusOf(broken)).as("rolled back, retried on the next run").isEqualTo("AWAITING_PAYMENT");

@@ -137,4 +137,21 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     @Query("update Payment p set p.refundQueries = :maxQueries, p.updatedAt = :now, p.version = p.version + 1 "
             + "where p.id = :id and p.status = com.bidtix.payment.domain.PaymentStatus.REFUND_PENDING")
     int stopRefundQueries(@Param("id") long id, @Param("maxQueries") int maxQueries, @Param("now") Instant now);
+
+    long countByStatus(PaymentStatus status);
+
+    long countByStatusAndCreatedAtBefore(PaymentStatus status, Instant createdBefore);
+
+    /** When the oldest payment still waiting for a refund was created. */
+    @Query("select min(p.createdAt) from Payment p "
+            + "where p.status = com.bidtix.payment.domain.PaymentStatus.REFUND_PENDING")
+    Optional<Instant> findOldestRefundPendingCreation();
+
+    /**
+     * Refunds the job will not finish by itself: no more requests or no more queries are made, or the payment is too old
+     * to be refunded through the API (no {@code requested_at}). A fifth request that is still on its way is counted too.
+     */
+    @Query("select count(p) from Payment p where p.status = com.bidtix.payment.domain.PaymentStatus.REFUND_PENDING "
+            + "and (p.refundAttempts >= :maxAttempts or p.refundQueries >= :maxQueries or p.requestedAt is null)")
+    long countRefundsNeedingAPerson(@Param("maxAttempts") int maxAttempts, @Param("maxQueries") int maxQueries);
 }

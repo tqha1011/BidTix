@@ -144,4 +144,6 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
             "and not exists (select a.id from Auction a where a.eventId = e.id and a.status in " +
             "(AuctionStatus.SCHEDULED, AuctionStatus.LIVE, AuctionStatus.AWAITING_PAYMENT))")
     List<Long> findCancelledEventsWithoutOpenAuctions(@Param("cancelledBefore") Instant cancelledBefore);
+
+    long countByStatusAndEndsAtBefore(AuctionStatus status, Instant endedBefore);
 }

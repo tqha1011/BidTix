@@ -6,9 +6,11 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.stereotype.Repository;
 
 import java.time.Instant;
 
+@Repository
 public interface PaymentWebhookEventRepository extends JpaRepository<PaymentWebhookEvent, Long> {
 
     /**
@@ -29,4 +31,6 @@ public interface PaymentWebhookEventRepository extends JpaRepository<PaymentWebh
             + "where e.provider = :provider and e.providerEventId = :eventId and e.processedAt is null")
     int markProcessed(@Param("provider") PaymentProvider provider, @Param("eventId") String eventId,
                       @Param("now") Instant now);
+
+    long countByProcessedAtIsNullAndCreatedAtBefore(Instant createdBefore);
 }

@@ -1,5 +1,7 @@
 package com.bidtix.booking.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import static com.bidtix.support.Counters.jobFailures;
 import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.infrastructure.BookingGateway;
 import com.bidtix.booking.infrastructure.CancelledEventOrderJob;
@@ -32,6 +34,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CancelledEventOrderJobTest extends PostgresIntegrationTest {
 
     @Autowired CancelledEventOrderJob job;
+    @Autowired MeterRegistry meters;
     @Autowired BookingService bookingService;
     @Autowired BookingGateway gateway;
     @Autowired EntityManager em;
@@ -176,7 +179,11 @@ class CancelledEventOrderJobTest extends PostgresIntegrationTest {
         String good = paidQuantity(f, 1);
         cancelEvent(f);
 
+        double failuresBefore = jobFailures(meters, "cancelled_event_orders");
+
         job.cancelOrdersOfCancelledEvents();
+
+        assertThat(jobFailures(meters, "cancelled_event_orders")).as("the failed item is counted").isGreaterThan(failuresBefore);
 
         assertThat(statusOf(good)).isEqualTo("CANCELLED");
         assertThat(statusOf(broken)).as("rolled back, retried on the next run").isEqualTo("PAID");
@@ -244,7 +251,11 @@ class CancelledEventOrderJobTest extends PostgresIntegrationTest {
         String last = insertUnpaidOrder(f, "BOOKING", f.zoneDbId());
         cancelEvent(f);
 
+        double failuresBefore = jobFailures(meters, "cancelled_event_orders");
+
         job.cancelOrdersOfCancelledEvents();
+
+        assertThat(jobFailures(meters, "cancelled_event_orders")).as("the failed item is counted").isGreaterThan(failuresBefore);
 
         assertThat(statusOf(first)).isEqualTo("CANCELLED");
         assertThat(statusOf(last)).isEqualTo("CANCELLED");

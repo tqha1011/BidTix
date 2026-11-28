@@ -1,5 +1,7 @@
 package com.bidtix.auction.infrastructure;
 
+import com.bidtix.config.metrics.Metrics.Job;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.auction.domain.AuctionOffer;
 import com.bidtix.auction.domain.AuctionStatus;
 import com.bidtix.auction.service.AuctionSettlementService;
@@ -44,6 +46,7 @@ public class CancelledEventAuctionJob {
     private final AuctionOfferRepository auctionOfferRepository;
     private final OrderRepository orderRepository;
     private final EventRepository eventRepository;
+    private final Metrics metrics;
     private final AuctionSettlementService settlement;
     private final TransactionTemplate transactionTemplate;
     private final Clock clock;
@@ -81,6 +84,7 @@ public class CancelledEventAuctionJob {
                         cancelled++;
                     }
                 } catch (RuntimeException e) {
+                    metrics.jobItemFailed(Job.CANCELLED_EVENT_AUCTIONS);
                     log.error("Could not cancel the auction of offer {} of a cancelled event; it is retried on the next run",
                             offerId, e);
                 }

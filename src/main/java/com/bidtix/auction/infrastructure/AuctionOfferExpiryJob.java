@@ -1,5 +1,7 @@
 package com.bidtix.auction.infrastructure;
 
+import com.bidtix.config.metrics.Metrics.Job;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.auction.domain.Auction;
 import com.bidtix.auction.domain.AuctionOffer;
 import com.bidtix.auction.domain.AuctionStatus;
@@ -51,6 +53,7 @@ public class AuctionOfferExpiryJob {
     private final TransactionTemplate transactionTemplate;
     private final ConfirmationGrace confirmationGrace;
     private final Clock clock;
+    private final Metrics metrics;
 
     /** What handling one offer produced; {@code returned} is set only when a ticket went back on sale. */
     private record Handled(@Nullable Returned returned) {
@@ -75,6 +78,7 @@ public class AuctionOfferExpiryJob {
                 } catch (RuntimeException e) {
                     // This offer rolled back as a whole, nothing is half done. The others go on; it is retried next run.
                     failed++;
+                    metrics.jobItemFailed(Job.OFFER_EXPIRY);
                     log.error("Could not handle expired offer {}", offerId, e);
                 }
             }

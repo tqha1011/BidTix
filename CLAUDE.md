@@ -30,8 +30,8 @@ seat-hold or payment flow).
 - Payment: VNPAY (sandbox by default), redirect to VNPAY's page and an asynchronous server-to-server callback (IPN).
   Settings come from `VNP_TMNCODE`, `VNP_HASH_SECRET`, `VNP_URL`, `VNP_RETURN_URL` (`bidtix.payment.vnpay.*`); the IPN
   URL is configured on VNPAY's side (`VNP_IPN_URL` is bound but not read by the code)
-- Lombok, springdoc-openapi (Swagger UI); the Micrometer Prometheus registry is on the classpath but its
-  endpoint is not exposed yet
+- Lombok, springdoc-openapi (Swagger UI); the Micrometer Prometheus registry's endpoint is exposed
+  only in the `monitoring` profile
 - Tests: JUnit 5, Mockito, MockMvc, Spring Security test, Testcontainers (real Postgres; Docker is
   required to run the integration tests; `PostgresIntegrationTest` also starts a Redis container).
 
@@ -134,8 +134,24 @@ tagged `benchmark` and skipped. To reproduce a CI run locally: `make keys && ./m
 background job sets it (see `BookingGateRedisDownTest`).
 
 Swagger UI: `http://localhost:8080/swagger-ui/index.html` · OpenAPI: `/v3/api-docs`. Both are public,
-as are `/api/v1/auth/**` and the VNPAY callback routes `/api/v1/payments/vnpay/{ipn,return}`; every other route (including `/actuator/**`, where only `health` is exposed)
-needs a Bearer token.
+as are `/api/v1/auth/**`, the VNPAY callback routes `/api/v1/payments/vnpay/{ipn,return}`, `/actuator/health` (status only) and
+`/actuator/prometheus`; every other route needs a Bearer token.
+
+**Metrics** (profile `monitoring`, `make run-monitoring`, `application-monitoring.yaml`): `health` and `prometheus` on a
+management port of their own, 9001, listening on loopback (`MANAGEMENT_ADDRESS`). Without the profile only `health` is
+exposed, on the application port. The two paths are whitelisted on every port, so never expose `prometheus` without the
+separate port. There is no Prometheus or Grafana in the repository yet.
+Custom counters all go through `config/metrics/Metrics` (fixed tag values only, never ids; registered at zero on startup):
+`bidtix.job.item.failures{job}` (an item a job caught and skipped: **a new per-item `catch` in a job must count it**, or the
+failure is invisible, because the run itself succeeds), `bidtix.payment.vnpay.ipn{code}` (every answer to the callback,
+which is always HTTP 200) and `bidtix.api.errors{code}` (counted in `GlobalExceptionHandler`).
+Gauges of work left undone are `config/metrics/BacklogGauge`s, one `*BacklogGauges` class per module in its
+`infrastructure`: a `COUNT` every 30 s kept in memory (`NaN` when it could not be read; `max` across instances).
+`bidtix.payments.refund.{pending,oldest.age.seconds,stuck}`, `bidtix.payments.pending.stale` (30 m),
+`bidtix.payments.webhooks.unprocessed` (5 m), `bidtix.orders.expired.uncancelled` (15 m),
+`bidtix.events.cancelled.uncleaned{module}` (10 m), `bidtix.auctions.overdue` (5 m). All but the refunds waiting and
+their age should be zero, except that abandoned payment pages pile up in `pending.stale`; a callback answered `01` or
+`04` also stays unprocessed for good. No index serves these counts yet.
 
 **First-time setup: JWT signing keys** (the app will not start without them; `keys/` is git-ignored)
 ```bash

@@ -1,5 +1,7 @@
 package com.bidtix.payment.service;
 
+import io.micrometer.core.instrument.MeterRegistry;
+import com.bidtix.support.Counters;
 import com.bidtix.booking.dtos.BookingTicketRequest;
 import com.bidtix.booking.infrastructure.OrderCancellationJob;
 import com.bidtix.booking.service.BookingService;
@@ -48,6 +50,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
             .atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant();
 
     @Autowired PaymentService service;
+    @Autowired MeterRegistry meters;
     @Autowired VnpaySigner signer;
     @Autowired BookingService bookingService;
     @Autowired OrderCancellationJob cancellationJob;
@@ -62,6 +65,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
 
     @Test
     void aPaidTransaction_marksThePaymentSucceeded_andTheOrderPaidAtVnpaysTime() {
+        double countedBefore = ipnAnswers("00");
         Attempt attempt = standingAttempt(2);
 
         TransactionResponse answer = send(paid(attempt));
@@ -73,10 +77,12 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         assertThat(jdbc.queryForObject("select paid_at from orders where order_code = ?", Timestamp.class, attempt.orderCode())
                 .toInstant()).isEqualTo(PAID_AT);
         assertThat(tickets(attempt)).isEqualTo(2);
+        assertThat(ipnAnswers("00")).isEqualTo(countedBefore + 1);
     }
 
     @Test
     void aWrongSignature_isAnswered97_andChangesNothing() {
+        double countedBefore = ipnAnswers("97");
         Attempt attempt = standingAttempt(1);
         Map<String, String> params = paid(attempt);
         params.put("vnp_BankCode", "OTHER");   // changed after signing
@@ -85,6 +91,7 @@ class VnpayIpnTest extends PostgresIntegrationTest {
 
         assertUntouched(attempt);
         assertThat(events(attempt.txnRef())).as("anyone can call the route: unsigned requests are not stored").isEmpty();
+        assertThat(ipnAnswers("97")).isEqualTo(countedBefore + 1);
     }
 
     @Test
@@ -422,5 +429,9 @@ class VnpayIpnTest extends PostgresIntegrationTest {
         assertThat(payment(attempt)).containsEntry("status", "PENDING").containsEntry("provider_txn_id", null);
         assertThat(orderStatus(attempt)).isEqualTo("PENDING_PAYMENT");
         assertThat(tickets(attempt)).isZero();
+    }
+
+    private double ipnAnswers(String code) {
+        return Counters.value(meters, "bidtix.payment.vnpay.ipn", "code", code);
     }
 }

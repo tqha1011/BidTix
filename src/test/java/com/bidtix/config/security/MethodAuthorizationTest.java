@@ -1,5 +1,7 @@
 package com.bidtix.config.security;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.booking.service.CheckInService;
 import com.bidtix.booking.controller.CheckInController;
 import com.bidtix.auction.controller.AuctionController;
@@ -542,6 +544,7 @@ class MethodAuthorizationTest {
             CheckInController.class})
     static class TestConfig {
         @Bean JwtDecoder jwtDecoder() { return mock(JwtDecoder.class); }
+        @Bean Metrics metrics() { return new Metrics(new SimpleMeterRegistry()); }
         @Bean VenueService venueService() { return mock(VenueService.class); }
         @Bean EventService eventService() { return mock(EventService.class); }
         @Bean ZoneService zoneService() { return mock(ZoneService.class); }

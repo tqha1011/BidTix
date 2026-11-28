@@ -4,7 +4,7 @@
 MVN := ./mvnw
 
 .DEFAULT_GOAL := help
-.PHONY: help keys run run-local run-seed test bench bench-gate bench-cancel load-test sale-day test-one build clean db-up db-down psql
+.PHONY: help keys run run-local run-seed run-monitoring test bench bench-gate bench-cancel load-test sale-day test-one build clean db-up db-down psql
 
 help: ## Show this list
 	@grep -hE '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*## "} {printf "  %-10s %s\n", $$1, $$2}'
@@ -30,6 +30,9 @@ run-local: keys ## Run the app with a non-Secure refresh cookie, for testing ove
 
 run-seed: keys ## Like run-local, and fills an empty database with sample users, events and tickets (dev only)
 	BIDTIX_SEED_ENABLED=true BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false $(MVN) spring-boot:run
+
+run-monitoring: keys ## Like run-local, plus metrics for Prometheus on 127.0.0.1:9001 (profile "monitoring")
+	SPRING_PROFILES_ACTIVE=monitoring BIDTIX_AUTH_REFRESHCOOKIE_SECURE=false $(MVN) spring-boot:run
 
 # ---- Test and build ---------------------------------------------------------
 test: ## Run all tests (BidtixBackendApplicationTests fails until Testcontainers is added)

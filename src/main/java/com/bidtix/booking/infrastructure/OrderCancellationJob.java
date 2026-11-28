@@ -1,5 +1,7 @@
 package com.bidtix.booking.infrastructure;
 
+import com.bidtix.config.metrics.Metrics.Job;
+import com.bidtix.config.metrics.Metrics;
 import com.bidtix.booking.infrastructure.OrderStockReleaser.Released;
 import com.bidtix.payment.service.ConfirmationGrace;
 import lombok.RequiredArgsConstructor;
@@ -39,6 +41,7 @@ public class OrderCancellationJob {
 
     private final OrderRepository orderRepository;
     private final OrderStockReleaser stockReleaser;
+    private final Metrics metrics;
     private final TransactionTemplate transactionTemplate;
     private final ConfirmationGrace confirmationGrace;
     private final Clock clock;
@@ -78,6 +81,7 @@ public class OrderCancellationJob {
             try {
                 cancelled += cancelInTransaction(List.of(orderId));
             } catch (RuntimeException e) {
+                metrics.jobItemFailed(Job.ORDER_CANCELLATION);
                 log.error("Could not cancel expired order {}; it is retried on the next run", orderId, e);
             }
         }
