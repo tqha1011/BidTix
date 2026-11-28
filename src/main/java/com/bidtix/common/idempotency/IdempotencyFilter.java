@@ -110,30 +110,31 @@ public class IdempotencyFilter extends OncePerRequestFilter {
             case KEY_REUSED -> refuse(request, response, new BusinessException(ErrorCode.IDEMPOTENCY_KEY_REUSED));
             case IN_PROGRESS -> refuse(request, response, new BusinessException(ErrorCode.IDEMPOTENCY_REQUEST_IN_PROGRESS));
             case REPLAY -> replay(response, claim);
-            case PROCEED -> run(userId, key, new CachedBodyRequestWrapper(request, body), response, chain);
+            case PROCEED -> run(userId, key, claim.token(), new CachedBodyRequestWrapper(request, body), response, chain);
         }
     }
 
-    private void run(Long userId, String key, CachedBodyRequestWrapper request, HttpServletResponse response,
-                     FilterChain chain) throws ServletException, IOException {
+    private void run(Long userId, String key, UUID token, CachedBodyRequestWrapper request,
+                     HttpServletResponse response, FilterChain chain) throws ServletException, IOException {
         ContentCachingResponseWrapper wrapped = new ContentCachingResponseWrapper(response);
         try {
             chain.doFilter(request, wrapped);
         } catch (IOException | ServletException | RuntimeException e) {
-            service.release(userId, key);
+            service.release(userId, key, token);
             throw e;
         }
         // stored BEFORE the client gets the response: a client that never sees it can retry and still get a replay
         int status = wrapped.getStatus();
         try {
             if (status >= 200 && status < 300) {
-                service.complete(userId, key, status, new String(wrapped.getContentAsByteArray(), StandardCharsets.UTF_8));
+                service.complete(userId, key, token, status,
+                        new String(wrapped.getContentAsByteArray(), StandardCharsets.UTF_8));
             } else {
-                service.release(userId, key);
+                service.release(userId, key, token);
             }
         } catch (RuntimeException e) {
             log.warn("Could not store the response of idempotency key; releasing it", e);
-            service.release(userId, key);
+            service.release(userId, key, token);
         }
         wrapped.copyBodyToResponse();
     }
