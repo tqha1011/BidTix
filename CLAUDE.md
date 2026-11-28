@@ -140,7 +140,7 @@ as are `/api/v1/auth/**`, the VNPAY callback routes `/api/v1/payments/vnpay/{ipn
 **Metrics** (profile `monitoring`, `make run-monitoring`, `application-monitoring.yaml`): `health` and `prometheus` on a
 management port of their own, 9001, listening on loopback (`MANAGEMENT_ADDRESS`). Without the profile only `health` is
 exposed, on the application port. The two paths are whitelisted on every port, so never expose `prometheus` without the
-separate port. There is no Prometheus or Grafana in the repository yet.
+separate port.
 Custom counters all go through `config/metrics/Metrics` (fixed tag values only, never ids; registered at zero on startup):
 `bidtix.job.item.failures{job}` (an item a job caught and skipped: **a new per-item `catch` in a job must count it**, or the
 failure is invisible, because the run itself succeeds), `bidtix.payment.vnpay.ipn{code}` (every answer to the callback,
@@ -152,6 +152,22 @@ Gauges of work left undone are `config/metrics/BacklogGauge`s, one `*BacklogGaug
 `bidtix.events.cancelled.uncleaned{module}` (10 m), `bidtix.auctions.overdue` (5 m). All but the refunds waiting and
 their age should be zero, except that abandoned payment pages pile up in `pending.stale`; a callback answered `01` or
 `04` also stays unprocessed for good. No index serves these counts yet.
+
+**Monitoring stack** (a development setup, not a production one):
+`docker compose -f compose.yaml -f compose-app.yaml -f monitoring/compose.observability.yaml up -d --build` runs the app
+in a container (profile `monitoring`, 2 GB, as UID `HOST_UID`, default 1000, so that it can read `keys/private.pem`; run
+`make keys` first), Prometheus (`localhost:9090`) and Grafana (`localhost:3000`, `GRAFANA_ADMIN_USER` and
+`GRAFANA_ADMIN_PASSWORD`, default admin/admin). The app has a file of its own because `spring-boot:run` starts everything in
+`compose.yaml`; an app run on the host (`make run-monitoring`) is not scraped by this stack. Port 9001 is not published: the
+app binds it to its fixed address (10.89.0.10) on the internal network `bidtix-scrape`, which only the app and Prometheus
+join (the host can still reach it). Every published port, PostgreSQL's and Redis's included, listens on 127.0.0.1 only.
+- Dashboard "BidTix Overview" is provisioned from `monitoring/grafana/dashboards/bidtix-overview.json`. The UI cannot save
+  over it: export the JSON and replace the file. The datasource's uid is `prometheus`.
+- Alert rules are in `monitoring/prometheus/alert.rule.yml`, their unit tests in `alert.rule.test.yml` (the command is at
+  the top of that file; CI does not run it). Restart Prometheus after changing a rule. There is no Alertmanager, so nobody
+  is notified.
+- The dashboard and the rules name metrics as strings: **renaming a metric or a tag means changing both**, and nothing fails
+  if you forget. The `job` tag of `bidtix.job.item.failures` arrives as `exported_job`, because Prometheus has its own `job`.
 
 **First-time setup: JWT signing keys** (the app will not start without them; `keys/` is git-ignored)
 ```bash
