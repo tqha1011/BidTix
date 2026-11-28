@@ -38,7 +38,7 @@ The facts about this project in one place, for a portfolio, a CV or a quick revi
 | **Type** | Personal portfolio project, backend only |
 | **Author** | Tran Quang Ha ([@tqha1011](https://github.com/tqha1011)) |
 | **Period** | Started November 2026, still in progress |
-| **Stack** | Java 21, Spring Boot 4 (Web MVC, Data JPA, Security), PostgreSQL, Flyway, Redis, VNPAY, JUnit 5, Testcontainers, k6, Docker, GitHub Actions |
+| **Stack** | Java 21, Spring Boot 4 (Web MVC, Data JPA, Security), PostgreSQL, Flyway, Redis, VNPAY, JUnit 5, Testcontainers, k6, Prometheus, Grafana, Docker, GitHub Actions |
 | **Architecture** | Modular monolith, package-by-feature, layered inside each module |
 | **Evidence** | 549 automated tests, reproducible [benchmarks](docs/benchmarks.md), [load test log](docs/load-test-log.md), 5 [architecture decision records](docs/ADR) |
 
@@ -486,6 +486,32 @@ The API reference is generated from the code: <http://localhost:8080/swagger-ui/
 does not read `.env` by itself). VNPAY must be able to reach the callback URL over public HTTPS, so local testing
 needs a tunnel. Setting `bidtix.payment.refund-cron` to `-` turns the refund jobs off.
 
+### Monitoring
+
+Runs the application in a container, with Prometheus and Grafana beside it:
+
+```bash
+make keys           # once: the application will not start without the signing keys
+docker compose -f compose.yaml -f compose-app.yaml -f monitoring/compose.observability.yaml up -d --build
+```
+
+| Address | What it is |
+|---|---|
+| <http://localhost:3000/d/bidtix-overview> | Grafana, "BidTix Overview" dashboard (`admin` / `admin` unless `GRAFANA_ADMIN_USER` and `GRAFANA_ADMIN_PASSWORD` are set) |
+| <http://localhost:9090/alerts> | Prometheus alerts |
+| <http://localhost:8080/swagger-ui/index.html> | the API |
+
+- The dashboard shows HTTP traffic and latency, the JVM, database connections and request threads, payments and
+  background work.
+- Four [alert rules](monitoring/prometheus/alert.rule.yml): application down, many server errors, a background job that
+  skipped an item, a refund that needs a person. The command for their unit tests is at the top of
+  [the test file](monitoring/prometheus/alert.rule.test.yml).
+- The metrics port (9001) is not published. The application listens on it only on an internal Docker network that it
+  shares with Prometheus; the Docker host can still reach it.
+- The application container runs as UID and GID 1000 so that it can read the private key: set `HOST_UID` and
+  `HOST_GID` if yours differ. `VNP_*` variables from the shell or `.env` are passed to it.
+- The network uses the subnet `10.89.0.0/24`; change it in `compose-app.yaml` if it is already taken.
+
 ## Limitations and roadmap
 
 Known limits:
@@ -505,6 +531,8 @@ Known limits:
 - Reading an event counts its free seats with a query that PostgreSQL can plan as a scan of the whole seat table. With
   600,000 seats in one zone it did, and the database used all its CPUs on it. The load test spreads those seats over
   zones of 1,000; the query is unchanged ([load test log](docs/load-test-log.md), run 22).
+- The monitoring stack is a local setup, not a production one: no Alertmanager, so nobody is notified of an alert,
+  default passwords, no TLS, `latest` images of Prometheus and Grafana, and CI does not run the alert tests.
 
 Done:
 
@@ -518,11 +546,11 @@ Done:
 - [x] Cancelling an event: auctions called off, orders cancelled, payments marked for refund
 - [x] Ticket check-in at the gate
 - [x] Per-user ticket limit
+- [x] Observability: custom metrics, a Prometheus endpoint kept off the public ports, a Grafana dashboard and alert rules
 
 Next:
 
 - [ ] Refunds proven on the VNPAY sandbox
-- [ ] Observability: a secured Prometheus endpoint
 
 ## Documentation
 
