@@ -46,5 +46,7 @@ public abstract class PostgresIntegrationTest {
         registry.add("bidtix.payment.refund-cron", () -> "-");
         // the same for the job that asks VNPAY about PENDING payments
         registry.add("bidtix.payment.status-query-cron", () -> "-");
+        // the key cleanup would delete rows other tests set up as expired: tests call it themselves
+        registry.add("bidtix.idempotency.cleanup-cron", () -> "-");
     }
 }

@@ -39,6 +39,15 @@ public interface IdempotencyRepository extends JpaRepository<IdempotencyKey, Lon
     int deleteExpired(@Param("userId") Long userId, @Param("key") String key, @Param("now") Instant now);
 
     /**
+     * Deletes up to {@code limit} keys whose time is up, the longest expired first, whatever their user and status. Rows
+     * another transaction holds are left for later. Fewer than {@code limit} means nothing more can be deleted now.
+     */
+    @Modifying
+    @Query(value = "delete from idempotency_keys where id in (select id from idempotency_keys "
+            + "where expires_at <= :now order by expires_at limit :limit for update skip locked)", nativeQuery = true)
+    int deleteExpiredBatch(@Param("now") Instant now, @Param("limit") int limit);
+
+    /**
      * Claims the key: 1 means this request owns it, 0 means it already exists. A concurrent insert of the same key
      * makes this wait for that transaction, so exactly one caller gets 1.
      */

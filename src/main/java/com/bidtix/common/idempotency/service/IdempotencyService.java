@@ -95,6 +95,12 @@ public class IdempotencyService {
         }
     }
 
+    /** Deletes up to {@code limit} expired keys of any user and returns how many; see {@code IdempotencyCleanupJob}. */
+    @Transactional
+    public int deleteExpiredBatch(int limit) {
+        return repository.deleteExpiredBatch(clock.instant(), limit);
+    }
+
     /** Frees a claimed key after a failure, so the client can retry it. */
     @Transactional
     public void release(Long userId, String key) {

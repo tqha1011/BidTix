@@ -82,6 +82,8 @@ bidtix:
     enabled: true
     ttl: 24h
     processing-timeout: 2m
+    # When expired keys are deleted (Spring cron; this is every minute, at second 45). "-" turns it off.
+    cleanup-cron: "45 * * * * *"
     paths:
       - /api/v1/auctions/*/bids
       - /api/v1/orders
