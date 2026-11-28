@@ -399,6 +399,8 @@ JWT encoder/decoder and `JwtUtil`, `PasswordEncoder`, `AuthenticationManager`, `
   state now, another request with the key gets `IDEMPOTENCY_KEY_REUSED` (compared by event, zone and seats or quantity:
   **a new field of `BookingTicketRequest` must be added to `requireSameRequest`**). The key never expires there. Gate
   refusals are not remembered again, or the flag would never expire. Bids and payment requests have no such guard.
+- Expired keys are deleted by `IdempotencyCleanupJob` (`bidtix.idempotency.cleanup-cron`, every minute; `-` turns it off,
+  which `PostgresIntegrationTest` does): batches of 1000 with `FOR UPDATE SKIP LOCKED`, 100 batches a run at most.
 
 **Caching**
 - Cache-aside with explicit TTLs; evict on write. Cached availability is a hint for reads only; every

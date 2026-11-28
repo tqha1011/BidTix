@@ -34,6 +34,7 @@ Version numbers are global across modules, so a new migration always takes the n
 | V22 | `payment` | partial index `idx_payments_pending_requested_at` (reading the `PENDING` payments to ask about) |
 | V23 | `payment` | payment status `CANCELLED` (still unpaid at the last query) |
 | V24 | `booking` | `orders.idempotency_key`, partial unique `ux_orders_user_idempotency_key` (one order per user and key) |
+| V25 | `common` | `idx_idempotency_keys_expires_at` (deleting expired keys) |
 
 ## Conventions
 
@@ -175,4 +176,4 @@ Add these once queries exist and are measured with `EXPLAIN`:
 - `orders(status, expires_at)` for the sweeper, `orders(user_id, created_at DESC)` for history
 - `auctions(status, ends_at)` for the closing job, `bids(auction_id, amount DESC)` for top bids
 - `seats(zone_id, status)` for the seat map (`events(status, starts_at)` for listing was added in V14)
-- `idempotency_keys(expires_at)` and `refresh_tokens(expires_at)` for cleanup
+- `refresh_tokens(expires_at)` for cleanup (`idempotency_keys(expires_at)` was added in V25)
